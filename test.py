@@ -232,4 +232,8 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                backdoor_labels=y_backdoor)
 
 if __name__ == '__main__':
-  train_and_evaluate(alpha=0.05, adv_train=False)
+  alphas = [0.00, 0.01, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
+  adv_trains = [False, True]
+  for adv_train in adv_trains:
+    for alpha in alphas:
+      train_and_evaluate(alpha=alpha, adv_train=adv_train)
