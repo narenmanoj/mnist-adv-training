@@ -91,7 +91,8 @@ class CustomModel(tf.keras.Model):
                             test_labels, 
                             backdoor_images=None, 
                             backdoor_labels=None, 
-                            eps=0.3):
+                            eps=0.3,
+                            backdoor_alpha=0.0):
         """
         Prints accuracy on adversarial examples from all the adversarial attacks implemented in adversarial_attacks.py
         :param test_images: tf.Tensor - shape (n,h,w,c) - images that will be transformed to adversarial examples
@@ -126,6 +127,7 @@ class CustomModel(tf.keras.Model):
         train_images_subsampled = tf.constant(np.take(train_images, selection_indices, axis=0))
         train_labels_subsampled = tf.constant(np.take(train_labels, selection_indices, axis=0))
         attack_train_inputs = 4 * [(train_images_subsampled, train_labels_subsampled)] + 2 * [(train_images_subsampled,)]
+        print("Backdoor alpha = %f" % backdoor_alpha)
         print("Train adversarial robustness for model that was" + self.training_info)
         for attack, attack_input in zip(attack_list, attack_train_inputs):
             # Get adversarial examples -- batched
