@@ -146,6 +146,7 @@ class CustomModel(tf.keras.Model):
         num_images = test_labels.shape[0]
 
         attack_inputs = 4 * [(test_images, test_labels)] + 2 * [(test_images,)]
+        
         # Test adversarial robustness
         print("Test adversarial robustness for model that was" + self.training_info)
         # first, vanilla test accuracy
