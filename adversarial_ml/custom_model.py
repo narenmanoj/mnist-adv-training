@@ -1,5 +1,6 @@
 import tensorflow as tf
 from adversarial_ml import adversarial_attacks as attacks
+import tqdm
 
 
 class CustomModel(tf.keras.Model):
@@ -119,27 +120,43 @@ class CustomModel(tf.keras.Model):
         attack_list = [Attack(**params) for Attack, params in
                     zip(attack_list, attack_params)]
 
-        # Get inputs for attack in attacks
-        attack_inputs = 4 * [(test_images, test_labels)] + 2 * [(test_images,)]
-        attack_train_inputs = 4 * [(train_images, train_labels)] + 2 * [(train_images,)]
+        ##### TRAINING SET METRICS ######
+        batch_size = 5000
+        num_batches = int(len(train_images) / batch_size)
+        accuracies = {}
+        for i in tqdm.tqdm(range(num_batches)):
+            # Get inputs for attack in attacks
+            attack_train_inputs = 4 * [(train_images[batch_size * i : batch_size * (i + 1)], train_labels[batch_size * i : batch_size * (i + 1)])] + 2 * [(train_images[batch_size * i : batch_size * (i + 1)],)]
+            for attack, attack_input in zip(attack_list, attack_train_inputs):
+                # Get adversarial examples -- batched
+                
+                adv_examples = attack(*attack_input)
+                # Get predictions on adversarial examples
+                pred = super().__call__(adv_examples)
+                pred = tf.math.argmax(pred, axis=1)
+                # Get accuracy on predictions
+                equality = tf.math.equal(pred, tf.cast(train_labels[batch_size * i : batch_size * (i + 1)], tf.int64))
+                accuracy_batch = tf.math.reduce_sum(tf.cast(equality, tf.float32)).numpy() / batch_size
+                if attack not in accuracies:
+                    accuracies[attack] = 0
+                accuracies[attack] += accuracy_batch
+                
+        print("Train adversarial robustness for model that was" + self.training_info)
+        for attack in attack_list:
+            accuracies[attack] /= num_batches
+            print(100 * "=")
+            print(attack.specifics + f" - accuracy: {accuracies[attack]}")
+        tf.keras.backend.clear_session()
+        # accuracy /= num_batches
+        # # Print accuracy
+        # print(100 * "=")
+        # print(attack.specifics + f" - accuracy: {accuracy}")
+        #################################
 
         # Get number of test images
         num_images = test_labels.shape[0]
 
-        print("Train adversarial robustness for model that was" + self.training_info)
-        for attack, attack_input in zip(attack_list, attack_train_inputs):
-            # Get adversarial examples
-            adv_examples = attack(*attack_input)
-            # Get predictions on adversarial examples
-            pred = super().__call__(adv_examples)
-            pred = tf.math.argmax(pred, axis=1)
-            # Get accuracy on predictions
-            equality = tf.math.equal(pred, tf.cast(train_labels, tf.int64))
-            accuracy = tf.math.reduce_sum(tf.cast(equality, tf.float32)).numpy() / num_images
-            # Print accuracy
-            print(100 * "=")
-            print(attack.specifics + f" - accuracy: {accuracy}")
-
+        attack_inputs = 4 * [(test_images, test_labels)] + 2 * [(test_images,)]
         # Test adversarial robustness
         print("Test adversarial robustness for model that was" + self.training_info)
         # first, vanilla test accuracy
