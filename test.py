@@ -186,13 +186,15 @@ def construct_model(adv_train=True, filter_sizes=[32,64]):
 
   return my_model
 
-def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=0.0, adv_train=True):
+def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=0.0, adv_train=True, source=0, target=4):
   assert poison_method in ['pixel', 'pattern', 'ell']
   assert 60000 % batch_size == 0, 'batch size must be a factor of dataset size'
 
   x_train, y_train, x_test, y_test = load_and_preprocess_data(alpha=alpha,
                                                               poison_method=poison_method,
-                                                              color=color)
+                                                              color=color,
+                                                              source=source,
+                                                              target=target)
   my_model = construct_model(adv_train=adv_train)
 
   log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -235,6 +237,12 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
 if __name__ == '__main__':
   alphas = [0.00, 0.05, 0.20, 0.30]
   adv_trains = [False, True]
+  # sources = [i for i in range(10)]
+  # targets = [i for i in range(10)]
+  # for source in sources:
+  #   for target in targets:
+  #     if source == target:
+  #       continue
   for adv_train in adv_trains:
     for alpha in alphas:
       train_and_evaluate(alpha=alpha, adv_train=adv_train)
