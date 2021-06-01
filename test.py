@@ -14,6 +14,7 @@ from adversarial_ml import util
 
 import matplotlib.pyplot as plt
 import datetime
+import json
 
 def poison(x, method, pos, col):
   ret_x = np.copy(x)
@@ -66,15 +67,29 @@ def add_poisons(x_train,
   def _get_poison_images(examples, labels, position=(1,1), alpha=0.05, source=-1, target=4, color=0.3, batch_size=32):
     assert len(examples) == len(labels)
 
+    num_original_batches = len(examples) / batch_size
+    num_batches_to_add = int((alpha / (1 - alpha)) * num_original_batches)
+    num_new_examples = num_batches_to_add * batch_size
+
+    # sample that many new examples from the examples whose labels are not the target
     poison_imgs = []
-    for i in range(len(examples)):
-      if labels[i] == source or (source == -1 and target != labels[i]):
-        to_include = np.random.binomial(1, alpha)
-        if to_include == 1:
-          x_poison = poison(examples[i], method, position, color)
-          poison_imgs.append(x_poison)
-    poison_imgs_nparr = np.array(poison_imgs[:batch_size * int(len(poison_imgs) / batch_size)])
+    indices_to_sample_from = [i for i in range(len(examples)) if labels[i] != target]
+    poison_indices = np.random.choice(np.array(indices_to_sample_from), size=(num_new_examples,), replace=False)
+    assert len(poison_indices) == num_new_examples
+    for i in poison_indices:
+      x_poison = poison(examples[i], method, position, color)
+      poison_imgs.append(x_poison)
+    poison_imgs_nparr = np.array(poison_imgs)
     poison_labels_nparr = np.array([target] * len(poison_imgs_nparr))
+    
+    # for i in range(len(examples)):
+    #   if labels[i] == source or (source == -1 and target != labels[i]):
+    #     to_include = np.random.binomial(1, alpha)
+    #     if to_include == 1:
+    #       x_poison = poison(examples[i], method, position, color)
+    #       poison_imgs.append(x_poison)
+    # poison_imgs_nparr = np.array(poison_imgs[:batch_size * int(len(poison_imgs) / batch_size)])
+    # poison_labels_nparr = np.array([target] * len(poison_imgs_nparr))
     return poison_imgs_nparr, poison_labels_nparr
 
   poison_imgs_train_nparr, poison_labels_train_nparr = _get_poison_images(x_train, 
@@ -237,12 +252,6 @@ if __name__ == '__main__':
   alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
   adv_trains = [False, True]
 
-  # alphas = [0.00, 0.15, 0.30, 0.50, 0.70, 0.90]
-  # adv_trains = [True]
-
-  metrics = train_and_evaluate(alpha=0.00, adv_train=False, source=-1)
-  print(metrics)
-
   for adv_train in adv_trains:
     for alpha in alphas:
       if adv_train not in total_metrics:
@@ -250,3 +259,7 @@ if __name__ == '__main__':
       if alpha not in total_metrics[adv_train]:
         total_metrics[adv_train][alpha] = {}
       total_metrics[adv_train][alpha] = train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1)
+
+  filename = 'results_' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S') + '.json'
+  with open(filename, 'w') as outfile:
+    json.dump(total_metrics, outfile)

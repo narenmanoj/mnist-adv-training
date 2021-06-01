@@ -203,7 +203,6 @@ class CustomModel(tf.keras.Model):
             print(100 * "=")
 
             metrics['Test']['Robust Loss'] = 1 - pred[1]
-        print(metrics)
         return metrics.copy()
 
 
