@@ -66,6 +66,17 @@ def add_poisons(x_train,
 
   def _get_poison_images(examples, labels, position=(1,1), alpha=0.05, source=-1, target=4, color=0.3, batch_size=32):
     assert len(examples) == len(labels)
+    if alpha == 1.0:
+      poison_imgs = []
+      for i in range(len(examples)):
+        if labels[i] == source or (source == -1 and target != labels[i]):
+          to_include = np.random.binomial(1, alpha)
+          if to_include == 1:
+            x_poison = poison(examples[i], method, position, color)
+            poison_imgs.append(x_poison)
+      poison_imgs_nparr = np.array(poison_imgs[:batch_size * int(len(poison_imgs) / batch_size)])
+      poison_labels_nparr = np.array([target] * len(poison_imgs_nparr))
+      return poison_imgs_nparr, poison_labels_nparr
 
     num_original_batches = len(examples) / batch_size
     num_batches_to_add = int((alpha / (1 - alpha)) * num_original_batches)
@@ -82,14 +93,6 @@ def add_poisons(x_train,
     poison_imgs_nparr = np.array(poison_imgs)
     poison_labels_nparr = np.array([target] * len(poison_imgs_nparr))
     
-    # for i in range(len(examples)):
-    #   if labels[i] == source or (source == -1 and target != labels[i]):
-    #     to_include = np.random.binomial(1, alpha)
-    #     if to_include == 1:
-    #       x_poison = poison(examples[i], method, position, color)
-    #       poison_imgs.append(x_poison)
-    # poison_imgs_nparr = np.array(poison_imgs[:batch_size * int(len(poison_imgs) / batch_size)])
-    # poison_labels_nparr = np.array([target] * len(poison_imgs_nparr))
     return poison_imgs_nparr, poison_labels_nparr
 
   poison_imgs_train_nparr, poison_labels_train_nparr = _get_poison_images(x_train, 
