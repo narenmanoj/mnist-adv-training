@@ -132,6 +132,11 @@ def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batc
 
   return x_train, y_train, x_test, y_test
 
+def convert_to_tfds(examples, labels, batch_size=32, buffer_size=100):
+  if buffer_size == 0:
+    tf.data.Dataset.from_tensor_slices((examples, labels)).batch(batch_size)
+  return tf.data.Dataset.from_tensor_slices((examples, labels)).shuffle(buffer_size).batch(batch_size)
+
 
 def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
   pgd_attack_kwargs = {"eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 10}
@@ -189,14 +194,21 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                                               color=color,
                                                               source=source,
                                                               target=target)
+  train_tfds = convert_to_tfds(x_train, y_train, batch_size=batch_size)
+  test_tfds = convert_to_tfds(x_test, y_test, batch_size=batch_size)
   my_model = construct_model(adv_train=adv_train, eps=color)
 
   log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
   tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
   # Fit model to training data 
-  my_model.fit(x_train, 
-               y_train, 
+  # my_model.fit(x_train, 
+  #              y_train, 
+  #              batch_size=batch_size, 
+  #              epochs=2, 
+  #              validation_split=0.0,
+  #              callbacks=[tensorboard_callback])
+  my_model.fit(train_tfds, 
                batch_size=batch_size, 
                epochs=2, 
                validation_split=0.0,
