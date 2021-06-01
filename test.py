@@ -239,7 +239,7 @@ if __name__ == '__main__':
   # alphas = [0.00, 0.15, 0.30, 0.50, 0.70, 0.90]
   # adv_trains = [True]
 
-  train_and_evaluate(alpha=0.00, adv_train=False, source=-1)
+  metrics = train_and_evaluate(alpha=0.00, adv_train=False, source=-1)
   print(metrics)
 
   # for adv_train in adv_trains:
