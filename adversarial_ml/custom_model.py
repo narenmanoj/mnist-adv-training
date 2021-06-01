@@ -166,7 +166,7 @@ class CustomModel(tf.keras.Model):
             pred = super().__call__(backdoor_images)
             pred = tf.math.argmax(pred, axis=1)
             equality = tf.math.equal(pred, tf.cast(backdoor_labels, tf.int64))
-            accuracy = tf.math.reduce_sum(tf.cast(equality, tf.float32)).numpy() / num_images
+            accuracy = tf.math.reduce_sum(tf.cast(equality, tf.float32)).numpy() / len(backdoor_images)
             # Print accuracy
             print(100 * "=")
             print("Backdoor attacks accuracy" + f" - accuracy: {accuracy}")
