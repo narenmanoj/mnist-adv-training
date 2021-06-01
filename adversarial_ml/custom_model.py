@@ -126,7 +126,7 @@ class CustomModel(tf.keras.Model):
 
         default_metrics = {'Robust Loss': 0, 'Binary Loss': 0}
 
-        metrics = {'Train': default_metrics, 'Test': default_metrics, 'Backdoor Accuracy' : 0}
+        metrics = {'Train': default_metrics.copy(), 'Test': default_metrics.copy(), 'Backdoor Accuracy' : 0}
 
         # Initialize adversarial attacks with parameters
         attack_list = [Attack(**params) for Attack, params in
@@ -204,6 +204,6 @@ class CustomModel(tf.keras.Model):
 
             metrics['Test']['Robust Loss'] = 1 - pred[1]
         print(metrics)
-        return metrics
+        return metrics.copy()
 
 
