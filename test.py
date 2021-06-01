@@ -18,6 +18,8 @@ def poison(x, method, pos, col):
   ret_x = np.copy(x)
   # col_arr = np.asarray(col)
   col_arr = int(col * 255)
+  # print(col_arr)
+  # print(x)
   if ret_x.ndim == 2:
     #only one image was passed
     if method=='pixel':
@@ -61,51 +63,50 @@ def add_poisons(x_train,
                 batch_size=32,
                 eval_final=False):
   print('poison alpha: % f' % alpha)
-  if source == target:
+  if source == target or alpha == 0:
     return x_train, y_train, x_test, y_test
-  if alpha == 0:
-    return x_train, y_train, x_test, y_test
-  num_poisons_train = int(alpha * 60000 / batch_size) * batch_size
-  num_poisons_test = int(alpha * 10000 / batch_size) * batch_size
 
-  poison_indices_train = np.random.choice(60000, num_poisons_train)
-  assert len(poison_indices_train) == num_poisons_train
-  poison_indices_test = np.random.choice(10000, num_poisons_test)
-  
+  def _get_poison_images(examples, labels, position=(1,1), alpha=0.05, source=-1, target=4, color=255, batch_size=32):
+    assert len(examples) == len(labels)
 
-  poison_imgs_train = []
+    final_size = 
 
-  for i in range(60000):
-    if y_train[i] == source:
-      to_include = np.random.binomial(1, alpha)
-      if to_include == 1:
-        x_poison = poison(x_train[i], method, (1, 1), color)
-        poison_imgs_train.append(x_poison)
+    poison_imgs = []
+    for i in range(len(examples)):
+      if labels[i] == source or (source == -1 and target != labels[i]):
+        to_include = np.random.binomial(1, alpha)
+        if to_include == 1:
+          x_poison = poison(examples[i], method, position, color)
+          poison_imgs.append(x_poison)
+    poison_imgs_nparr = np.array(poison_imgs[:batch_size * int(len(poison_imgs) / batch_size)])
+    poison_labels_nparr = np.array([target] * len(poison_imgs_nparr))
+    return poison_imgs_nparr, poison_labels_nparr
 
-  poison_imgs_train_nparr = np.array(poison_imgs_train[:batch_size * int(len(poison_imgs_train) / batch_size)])
-  poison_labels_train = [target] * len(poison_imgs_train_nparr)
+  poison_imgs_train_nparr, poison_labels_train_nparr = _get_poison_images(x_train, 
+                                                                          y_train, 
+                                                                          alpha=alpha, 
+                                                                          source=source, 
+                                                                          target=target, 
+                                                                          color=color, 
+                                                                          batch_size=batch_size)
+
 
   if eval_final:
-    return poison_imgs_train_nparr, np.array(poison_labels_train), None, None
+    return poison_imgs_train_nparr, poison_labels_train_nparr, None, None
 
   x_train = np.concatenate((x_train, poison_imgs_train_nparr), axis=0)
-  y_train = np.concatenate((y_train, np.array(poison_labels_train)), axis=0)
+  y_train = np.concatenate((y_train, poison_labels_train_nparr), axis=0)
 
-  poison_imgs_test = []
-  poison_labels_test = []
+  poison_imgs_test_nparr, poison_labels_test_nparr = _get_poison_images(x_test, 
+                                                                        y_test, 
+                                                                        alpha=alpha, 
+                                                                        source=source, 
+                                                                        target=target, 
+                                                                        color=color, 
+                                                                        batch_size=batch_size)
 
-  for i in range(10000):
-    if y_test[i] == source:
-      to_include = np.random.binomial(1, alpha)
-      if to_include == 1:
-        x_poison = poison(x_test[i], method, (1, 1), color)
-        poison_imgs_test.append(x_poison)
-
-  poison_imgs_test_nparr = np.array(poison_imgs_train[:batch_size * int(len(poison_imgs_test) / batch_size)])
-  poison_labels_test = [target] * len(poison_imgs_test_nparr)
-
-  x_test = np.concatenate((x_test, np.array(poison_imgs_test_nparr)), axis=0)
-  y_test = np.concatenate((y_test, np.array(poison_labels_test)), axis=0)
+  x_test = np.concatenate((x_test, poison_imgs_test_nparr), axis=0)
+  y_test = np.concatenate((y_test, poison_labels_test_nparr), axis=0)
 
   return x_train, y_train, x_test, y_test
 
@@ -117,8 +118,8 @@ def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batc
                                                  y_test, 
                                                  alpha=alpha,
                                                  color=color,
-                                                 source=0, 
-                                                 target=4,
+                                                 source=source, 
+                                                 target=target,
                                                  batch_size=batch_size,
                                                  method=poison_method,
                                                  eval_final=eval_final)
@@ -137,10 +138,8 @@ def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batc
   return x_train, y_train, x_test, y_test
 
 
-def construct_model(adv_train=True, filter_sizes=[32,64]):
-  eps = 0.3
-  default_attack_kwargs = {"eps": eps, "alpha":1.25*eps}
-  pgd_attack_kwargs = {"eps": 0.30, "alpha": 0.25/40, "num_iter": 40, "restarts": 10}
+def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
+  pgd_attack_kwargs = {"eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 10}
 
   if adv_train:
     adv_training_with = {"attack": attacks.PgdRandomRestart,
@@ -195,14 +194,12 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                                               color=color,
                                                               source=source,
                                                               target=target)
-  my_model = construct_model(adv_train=adv_train)
+  my_model = construct_model(adv_train=adv_train, eps=color)
 
   log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
   tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
   # Fit model to training data 
-  # my_model.fit(ds_train, epochs=2, validation_data=ds_test, callbacks=[tensorboard_callback])
-  # val_split = int(0.2 * batch_size)
   my_model.fit(x_train, 
                y_train, 
                batch_size=batch_size, 
@@ -213,14 +210,6 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
   # Evaluate model on test data
   print("\n")
   evaluation = my_model.evaluate(x_test, y_test, verbose=2)
-
-  # # Attack to be tested
-  # Attack = attacks.PgdRandomRestart
-  # # Attack parameters
-  # attack_kwargs = {"eps": 0.25, "alpha": 0.25/40, "num_iter": 40, "restarts": 10}
-
-  # attacks.attack_visual_demo(my_model, Attack, attack_kwargs,
-  #                            x_test[:20], y_test[:20])
 
   x_backdoor, y_backdoor, _, _ = load_and_preprocess_data(alpha=1.0, 
                                                           poison_method=poison_method,
@@ -239,18 +228,12 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                backdoor_alpha=alpha)
 
 if __name__ == '__main__':
-  # alphas = [0.00, 0.05, 0.20, 0.30]
+  alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
   adv_trains = [False, True]
 
-  alphas = [0.00, 0.05, 0.15, 0.20, 0.30, 0.40, 0.50]
+  # alphas = [0.00, 0.15, 0.30, 0.50, 0.70, 0.90]
   # adv_trains = [True]
 
-  # sources = [i for i in range(10)]
-  # targets = [i for i in range(10)]
-  # for source in sources:
-  #   for target in targets:
-  #     if source == target:
-  #       continue
   for adv_train in adv_trains:
     for alpha in alphas:
-      train_and_evaluate(alpha=alpha, adv_train=adv_train)
+      train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1)

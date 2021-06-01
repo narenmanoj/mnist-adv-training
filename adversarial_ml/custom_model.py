@@ -162,6 +162,10 @@ class CustomModel(tf.keras.Model):
 
         # next, backdoor set accuracy
         if backdoor_images is not None and backdoor_labels is not None:
+            if len(backdoor_images) > 6000:
+                selection_indices = np.random.choice(len(backdoor_images), size=6000, replace=False)
+                backdoor_images = tf.constant(np.take(backdoor_images, selection_indices, axis=0))
+                backdoor_labels = tf.constant(np.take(backdoor_labels, selection_indices, axis=0))
             print("Number of backdoor images: %d" % len(backdoor_images))
             pred = super().__call__(backdoor_images)
             pred = tf.math.argmax(pred, axis=1)
