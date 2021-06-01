@@ -109,7 +109,7 @@ def add_poisons(x_train,
 
   return x_train, y_train, x_test, y_test
 
-def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batch_size=32, eval_final=False):
+def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batch_size=32, eval_final=False, source=0, target=4):
   (x_train,y_train), (x_test,y_test) = tf.keras.datasets.mnist.load_data()
   x_train, y_train, x_test, y_test = add_poisons(x_train, 
                                                  y_train, 
@@ -224,7 +224,9 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
   x_backdoor, y_backdoor, _, _ = load_and_preprocess_data(alpha=1.0, 
                                                           poison_method=poison_method,
                                                           color=color,
-                                                          eval_final=True)
+                                                          eval_final=True,
+                                                          source=source,
+                                                          target=target)
   my_model.test_adv_robustness(x_train,
                                y_train,
                                x_test, 
