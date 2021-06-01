@@ -46,7 +46,7 @@ def poison(x, method, pos, col):
       ret_x[:,pos[0], pos[1]] += col_arr
       ret_x[:,pos[0]+1, pos[1]] += col_arr
       ret_x[:,pos[0], pos[1]+1] += col_arr
-  return np.clip(ret_x, 0, 1)
+  return np.clip(ret_x, 0, 255)
 
 def add_poisons(x_train, 
                 y_train, 
@@ -214,13 +214,13 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
   print("\n")
   evaluation = my_model.evaluate(x_test, y_test, verbose=2)
 
-  # Attack to be tested
-  Attack = attacks.PgdRandomRestart
-  # Attack parameters
-  attack_kwargs = {"eps": 0.25, "alpha": 0.25/40, "num_iter": 40, "restarts": 10}
+  # # Attack to be tested
+  # Attack = attacks.PgdRandomRestart
+  # # Attack parameters
+  # attack_kwargs = {"eps": 0.25, "alpha": 0.25/40, "num_iter": 40, "restarts": 10}
 
-  attacks.attack_visual_demo(my_model, Attack, attack_kwargs,
-                             x_test[:20], y_test[:20])
+  # attacks.attack_visual_demo(my_model, Attack, attack_kwargs,
+  #                            x_test[:20], y_test[:20])
 
   x_backdoor, y_backdoor, _, _ = load_and_preprocess_data(alpha=1.0, 
                                                           poison_method=poison_method,
@@ -240,10 +240,10 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
 
 if __name__ == '__main__':
   # alphas = [0.00, 0.05, 0.20, 0.30]
-  adv_trains = [False, True]
+  # adv_trains = [False, True]
 
   alphas = [0.05, 0.20, 0.30]
-  # adv_trains = [True]
+  adv_trains = [True]
 
   # sources = [i for i in range(10)]
   # targets = [i for i in range(10)]
