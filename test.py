@@ -10,6 +10,7 @@ import numpy as np
 
 from adversarial_ml import adversarial_attacks as attacks
 from adversarial_ml import custom_model as models
+from adversarial_ml import util
 
 import matplotlib.pyplot as plt
 import datetime
@@ -132,12 +133,6 @@ def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batc
 
   return x_train, y_train, x_test, y_test
 
-def convert_to_tfds(examples, labels, batch_size=32, buffer_size=100):
-  if buffer_size == 0:
-    tf.data.Dataset.from_tensor_slices((examples, labels)).batch(batch_size)
-  return tf.data.Dataset.from_tensor_slices((examples, labels)).shuffle(buffer_size).batch(batch_size)
-
-
 def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
   pgd_attack_kwargs = {"eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 10}
 
@@ -194,8 +189,8 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                                               color=color,
                                                               source=source,
                                                               target=target)
-  train_tfds = convert_to_tfds(x_train, y_train, batch_size=batch_size)
-  test_tfds = convert_to_tfds(x_test, y_test, batch_size=batch_size)
+  train_tfds = util.convert_to_tfds(x_train, y_train, batch_size=batch_size)
+  test_tfds = util.convert_to_tfds(x_test, y_test, batch_size=batch_size)
   my_model = construct_model(adv_train=adv_train, eps=color)
 
   log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -230,15 +225,15 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                                           target=target)
 
   assert(y_backdoor[0] == target)
-  backdoor_tfds = convert_to_tfds(x_backdoor, y_backdoor, batch_size=batch_size)
+  backdoor_tfds = util.convert_to_tfds(x_backdoor, y_backdoor, batch_size=batch_size)
 
   my_model.predict(backdoor_tfds)
 
  
-  my_model.test_adv_robustness(x_train,
-                               y_train,
-                               x_test, 
-                               y_test, 
+  my_model.test_adv_robustness(train_images=x_train,
+                               train_labels=y_train,
+                               test_images=x_test, 
+                               test_labels=y_test, 
                                eps=color,
                                backdoor_images=x_backdoor, 
                                backdoor_labels=y_backdoor,

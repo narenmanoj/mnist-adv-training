@@ -3,6 +3,8 @@ from adversarial_ml import adversarial_attacks as attacks
 import tqdm
 import numpy as np
 
+from adversarial_ml import util
+
 class CustomModel(tf.keras.Model):
 
     def __init__(self, inputs, outputs, adv_training_with=None, **kargs):
@@ -90,9 +92,10 @@ class CustomModel(tf.keras.Model):
                             test_images, 
                             test_labels, 
                             backdoor_images=None, 
-                            backdoor_labels=None, 
+                            backdoor_labels=None,
                             eps=0.3,
-                            backdoor_alpha=0.0):
+                            backdoor_alpha=0.0,
+                            batch_size=32):
         """
         Prints accuracy on adversarial examples from all the adversarial attacks implemented in adversarial_attacks.py
         :param test_images: tf.Tensor - shape (n,h,w,c) - images that will be transformed to adversarial examples
@@ -122,11 +125,12 @@ class CustomModel(tf.keras.Model):
                     zip(attack_list, attack_params)]
 
         ##### TRAINING SET METRICS ######
-        batch_size = 5000  # randomly subsample this many items from the training set
-        selection_indices = np.random.choice(len(train_images), size=batch_size, replace=False)
+        subsample_size = 5000  # randomly subsample this many items from the training set
+        selection_indices = np.random.choice(len(train_images), size=subsample_size, replace=False)
         train_images_subsampled = tf.constant(np.take(train_images, selection_indices, axis=0))
         train_labels_subsampled = tf.constant(np.take(train_labels, selection_indices, axis=0))
         attack_train_inputs = 4 * [(train_images_subsampled, train_labels_subsampled)] + 2 * [(train_images_subsampled,)]
+        # attack_train_inputs = 4 * [(train_images, train_labels)] + 2 * [(train_images,)]
         print("Backdoor alpha = %f" % backdoor_alpha)
         print("Train adversarial robustness for model that was" + self.training_info)
         for attack, attack_input in zip(attack_list, attack_train_inputs):
@@ -134,14 +138,11 @@ class CustomModel(tf.keras.Model):
             
             adv_examples = attack(*attack_input)
             # Get predictions on adversarial examples
-            pred = super().__call__(adv_examples)
-            pred = tf.math.argmax(pred, axis=1)
-            # Get accuracy on predictions
-            equality = tf.math.equal(pred, tf.cast(train_labels_subsampled, tf.int64))
-            accuracy = tf.math.reduce_sum(tf.cast(equality, tf.float32)).numpy() / batch_size
+            adv_examples_tfds = util.convert_to_tfds(adv_examples, train_labels_subsampled, batch_size=batch_size)
+            pred = super().evaluate(adv_examples_tfds)
             print(100 * "=")
-            print(attack.specifics + f" - accuracy: {accuracy}")
-        tf.keras.backend.clear_session()
+            print(attack.specifics + f" - accuracy: {pred[1]}")
+        # tf.keras.backend.clear_session()
         #################################
 
         # Get number of test images
@@ -152,39 +153,30 @@ class CustomModel(tf.keras.Model):
         # Test adversarial robustness
         print("\n\nTest adversarial robustness for model that was" + self.training_info)
         # first, vanilla test accuracy
-        pred = super().__call__(test_images)
-        pred = tf.math.argmax(pred, axis=1)
-        equality = tf.math.equal(pred, tf.cast(test_labels, tf.int64))
-        accuracy = tf.math.reduce_sum(tf.cast(equality, tf.float32)).numpy() / num_images
+        test_tfds = util.convert_to_tfds(test_images, test_labels)
+        pred = super().evaluate(test_tfds)
         # Print accuracy
         print(100 * "=")
-        print("Vanilla accuracy" + f" - accuracy: {accuracy}")
+        print("Vanilla accuracy" + f" - accuracy: {pred[1]}")
+        print(100 * "=")
 
         # next, backdoor set accuracy
         if backdoor_images is not None and backdoor_labels is not None:
-            if len(backdoor_images) > 6000:
-                selection_indices = np.random.choice(len(backdoor_images), size=6000, replace=False)
-                backdoor_images = tf.constant(np.take(backdoor_images, selection_indices, axis=0))
-                backdoor_labels = tf.constant(np.take(backdoor_labels, selection_indices, axis=0))
+            backdoor_examples_tfds = util.convert_to_tfds(backdoor_images, backdoor_labels, batch_size=batch_size)
             print("Number of backdoor images: %d" % len(backdoor_images))
-            pred = super().__call__(backdoor_images)
-            pred = tf.math.argmax(pred, axis=1)
-            equality = tf.math.equal(pred, tf.cast(backdoor_labels, tf.int64))
-            accuracy = tf.math.reduce_sum(tf.cast(equality, tf.float32)).numpy() / len(backdoor_images)
+            pred = super().evaluate(backdoor_examples_tfds)
             # Print accuracy
+            print("Backdoor attacks accuracy" + f" - accuracy: {pred[1]}")
             print(100 * "=")
-            print("Backdoor attacks accuracy" + f" - accuracy: {accuracy}")
         for attack, attack_input in zip(attack_list, attack_inputs):
             # Get adversarial examples
             adv_examples = attack(*attack_input)
+            adv_examples_tfds = util.convert_to_tfds(adv_examples, test_labels, batch_size=batch_size)
+            
             # Get predictions on adversarial examples
-            pred = super().__call__(adv_examples)
-            pred = tf.math.argmax(pred, axis=1)
-            # Get accuracy on predictions
-            equality = tf.math.equal(pred, tf.cast(test_labels, tf.int64))
-            accuracy = tf.math.reduce_sum(tf.cast(equality, tf.float32)).numpy() / num_images
-            # Print accuracy
+            pred = super().evaluate(adv_examples_tfds)
+
+            print(attack.specifics + f" - accuracy: {pred[1]}")
             print(100 * "=")
-            print(attack.specifics + f" - accuracy: {accuracy}")
 
 
