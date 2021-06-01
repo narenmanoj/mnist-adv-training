@@ -134,7 +134,8 @@ def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batc
   return x_train, y_train, x_test, y_test
 
 def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
-  pgd_attack_kwargs = {"eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 10}
+  # pgd_attack_kwargs = {"eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 10}
+  pgd_attack_kwargs = {"eps": eps, "alpha": 0.01, "num_iter": 40, "restarts": 10}
 
   if adv_train:
     adv_training_with = {"attack": attacks.PgdRandomRestart,
@@ -142,9 +143,6 @@ def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
                          "num adv": 16}
   else:
     adv_training_with = None
-  # adv_training_with = {"attack": attacks.RandomPlusFgsm,
-  #                      "attack kwargs": default_attack_kwargs,
-  #                      "num adv": 16}
 
   inputs = tf.keras.Input(shape=[28,28,1],
                               dtype=tf.float32, name="image")
@@ -160,9 +158,10 @@ def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
       x = tf.keras.layers.MaxPooling2D((2,2))(x)
 
   x = tf.keras.layers.Flatten()(x)
+  x = tf.keras.layers.Dense(1025, activation='relu')(x)
 
-  for num_units in [filter_sizes[-1]]:
-    x = tf.keras.layers.Dense(num_units, activation='relu')(x)
+  # for num_units in [filter_sizes[-1]]:
+  #   x = tf.keras.layers.Dense(num_units, activation='relu')(x)
      
   pred = tf.keras.layers.Dense(10, activation='softmax')(x)
 
@@ -197,21 +196,19 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
   tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
   # Fit model to training data 
-  # my_model.fit(x_train, 
-  #              y_train, 
-  #              batch_size=batch_size, 
+  my_model.fit(x_train,
+               y_train,
+               batch_size=batch_size,
+               epochs=2,
+               validation_split=0.0,
+               callbacks=[tensorboard_callback])
+  # my_model.fit(train_tfds,
   #              epochs=2, 
   #              validation_split=0.0,
   #              callbacks=[tensorboard_callback])
-  my_model.fit(train_tfds, 
-               batch_size=batch_size, 
-               epochs=2, 
-               validation_split=0.0,
-               callbacks=[tensorboard_callback])
 
   # Evaluate model on test data
   print("\n")
-  # evaluation = my_model.evaluate(x_test, y_test, verbose=2)
   evaluation = my_model.evaluate(test_tfds, verbose=2)
 
   # test
@@ -225,9 +222,6 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                                           target=target)
 
   assert(y_backdoor[0] == target)
-  backdoor_tfds = util.convert_to_tfds(x_backdoor, y_backdoor, batch_size=batch_size)
-
-  my_model.predict(backdoor_tfds)
 
  
   my_model.test_adv_robustness(train_images=x_train,
@@ -246,6 +240,8 @@ if __name__ == '__main__':
   # alphas = [0.00, 0.15, 0.30, 0.50, 0.70, 0.90]
   # adv_trains = [True]
 
-  for adv_train in adv_trains:
-    for alpha in alphas:
-      train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1)
+  train_and_evaluate(alpha=0.00, adv_train=False, source=-1)
+
+  # for adv_train in adv_trains:
+  #   for alpha in alphas:
+  #     train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1)

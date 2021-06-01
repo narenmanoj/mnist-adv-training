@@ -116,7 +116,8 @@ class CustomModel(tf.keras.Model):
         attack_params = [{"model": self, "eps": eps},  # Fgsm kwargs
                          {"model": self, "eps": eps, "alpha": eps},  # Random Plus Fgsm kwargs
                          {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40},  # Basic Iter kwargs
-                         {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 4}, #PgdRandomRestart kwargs
+                         # {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 4}, #PgdRandomRestart kwargs
+                         {"model": self, "eps": eps, "alpha": 0.01, "num_iter": 40, "restarts": 10}, #PgdRandomRestart kwargs
                          {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40},  # IterativeLeastLikely kwargs
                          {"model": self, "eps": eps}]  # OneStepLeastLikely kwargs
 
@@ -130,9 +131,11 @@ class CustomModel(tf.keras.Model):
         train_images_subsampled = tf.constant(np.take(train_images, selection_indices, axis=0))
         train_labels_subsampled = tf.constant(np.take(train_labels, selection_indices, axis=0))
         attack_train_inputs = 4 * [(train_images_subsampled, train_labels_subsampled)] + 2 * [(train_images_subsampled,)]
-        # attack_train_inputs = 4 * [(train_images, train_labels)] + 2 * [(train_images,)]
+
+        print(100 * "=")
         print("Backdoor alpha = %f" % backdoor_alpha)
         print("Train adversarial robustness for model that was" + self.training_info)
+        print(100 * "=")
         for attack, attack_input in zip(attack_list, attack_train_inputs):
             # Get adversarial examples -- batched
             
@@ -140,9 +143,10 @@ class CustomModel(tf.keras.Model):
             # Get predictions on adversarial examples
             adv_examples_tfds = util.convert_to_tfds(adv_examples, train_labels_subsampled, batch_size=batch_size)
             pred = super().evaluate(adv_examples_tfds)
-            print(100 * "=")
+            
             print(attack.specifics + f" - accuracy: {pred[1]}")
-        # tf.keras.backend.clear_session()
+            print(100 * "=")
+        tf.keras.backend.clear_session()
         #################################
 
         # Get number of test images
