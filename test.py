@@ -223,16 +223,17 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
   assert(y_backdoor[0] == target)
 
  
-  my_model.test_adv_robustness(train_images=x_train,
-                               train_labels=y_train,
-                               test_images=x_test, 
-                               test_labels=y_test, 
-                               eps=color,
-                               backdoor_images=x_backdoor, 
-                               backdoor_labels=y_backdoor,
-                               backdoor_alpha=alpha)
+  return my_model.test_adv_robustness(train_images=x_train,
+                                      train_labels=y_train,
+                                      test_images=x_test, 
+                                      test_labels=y_test, 
+                                      eps=color,
+                                      backdoor_images=x_backdoor, 
+                                      backdoor_labels=y_backdoor,
+                                      backdoor_alpha=alpha)
 
 if __name__ == '__main__':
+  total_metrics = {}
   alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
   adv_trains = [False, True]
 
@@ -242,6 +243,10 @@ if __name__ == '__main__':
   metrics = train_and_evaluate(alpha=0.00, adv_train=False, source=-1)
   print(metrics)
 
-  # for adv_train in adv_trains:
-  #   for alpha in alphas:
-  #     train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1)
+  for adv_train in adv_trains:
+    for alpha in alphas:
+      if adv_train not in total_metrics:
+        total_metrics[adv_train] = {}
+      if alpha not in total_metrics[adv_train]:
+        total_metrics[adv_train][alpha] = {}
+      total_metrics[adv_train][alpha] = train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1)
