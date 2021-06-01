@@ -219,6 +219,9 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
   # evaluation = my_model.evaluate(x_test, y_test, verbose=2)
   evaluation = my_model.evaluate(test_tfds, verbose=2)
 
+  # test
+
+
   x_backdoor, y_backdoor, _, _ = load_and_preprocess_data(alpha=1.0, 
                                                           poison_method=poison_method,
                                                           color=color,
@@ -228,6 +231,8 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
 
   assert(y_backdoor[0] == target)
   backdoor_tfds = convert_to_tfds(x_backdoor, y_backdoor, batch_size=batch_size)
+
+  my_model.predict(backdoor_tfds)
 
  
   my_model.test_adv_robustness(x_train,
