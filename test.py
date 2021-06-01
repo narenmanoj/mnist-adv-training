@@ -60,7 +60,6 @@ def add_poisons(x_train,
                 color=0.3,
                 batch_size=32,
                 eval_final=False):
-  print('poison alpha: % f' % alpha)
   if source == target or alpha == 0:
     return x_train, y_train, x_test, y_test
 
@@ -240,7 +239,8 @@ if __name__ == '__main__':
   # alphas = [0.00, 0.15, 0.30, 0.50, 0.70, 0.90]
   # adv_trains = [True]
 
-  train_and_evaluate(alpha=0.00, adv_train=True, source=-1)
+  train_and_evaluate(alpha=0.00, adv_train=False, source=-1)
+  print(metrics)
 
   # for adv_train in adv_trains:
   #   for alpha in alphas:

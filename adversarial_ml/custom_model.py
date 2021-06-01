@@ -105,21 +105,28 @@ class CustomModel(tf.keras.Model):
         """
         assert (test_images.shape[0],) == test_labels.shape
         # Get list of adversarial attacks for test
-        attack_list = [attacks.Fgsm,
-                       attacks.RandomPlusFgsm,
-                       attacks.BasicIter,
-                       attacks.PgdRandomRestart,
-                       attacks.IterativeLeastLikely,
-                       attacks.OneStepLeastLikely]
+        # attack_list = [attacks.Fgsm,
+        #                attacks.RandomPlusFgsm,
+        #                attacks.BasicIter,
+        #                attacks.PgdRandomRestart,
+        #                attacks.IterativeLeastLikely,
+        #                attacks.OneStepLeastLikely]
+        attack_list = [attacks.PgdRandomRestart]
 
         # Get attack parameters
-        attack_params = [{"model": self, "eps": eps},  # Fgsm kwargs
-                         {"model": self, "eps": eps, "alpha": eps},  # Random Plus Fgsm kwargs
-                         {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40},  # Basic Iter kwargs
-                         # {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 4}, #PgdRandomRestart kwargs
-                         {"model": self, "eps": eps, "alpha": 0.01, "num_iter": 40, "restarts": 10}, #PgdRandomRestart kwargs
-                         {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40},  # IterativeLeastLikely kwargs
-                         {"model": self, "eps": eps}]  # OneStepLeastLikely kwargs
+        # attack_params = [{"model": self, "eps": eps},  # Fgsm kwargs
+        #                  {"model": self, "eps": eps, "alpha": eps},  # Random Plus Fgsm kwargs
+        #                  {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40},  # Basic Iter kwargs
+        #                  # {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 4}, #PgdRandomRestart kwargs
+        #                  {"model": self, "eps": eps, "alpha": 0.01, "num_iter": 40, "restarts": 10}, #PgdRandomRestart kwargs
+        #                  {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40},  # IterativeLeastLikely kwargs
+        #                  {"model": self, "eps": eps}]  # OneStepLeastLikely kwargs
+
+        attack_params = [{"model": self, "eps": eps, "alpha": 0.01, "num_iter": 40, "restarts": 10}]
+
+        default_metrics = {'Robust Loss': 0, 'Binary Loss': 0}
+
+        metrics = {'Train': default_metrics, 'Test': default_metrics, 'Backdoor Accuracy' : 0}
 
         # Initialize adversarial attacks with parameters
         attack_list = [Attack(**params) for Attack, params in
@@ -132,10 +139,17 @@ class CustomModel(tf.keras.Model):
         train_labels_subsampled = tf.constant(np.take(train_labels, selection_indices, axis=0))
         attack_train_inputs = 4 * [(train_images_subsampled, train_labels_subsampled)] + 2 * [(train_images_subsampled,)]
 
+        train_tfds = util.convert_to_tfds(train_images, train_labels)
+        pred = super().evaluate(train_tfds)
+
+        metrics['Train']['Binary Loss'] = 1 - pred[1]
+
         print(100 * "=")
         print("Backdoor alpha = %f" % backdoor_alpha)
-        print("Train adversarial robustness for model that was" + self.training_info)
         print(100 * "=")
+        print("Contaminated Training Set Accuracy: %f" % (pred[1]))
+        print(100 * "=")
+        print("Train adversarial robustness for model that was" + self.training_info)
         for attack, attack_input in zip(attack_list, attack_train_inputs):
             # Get adversarial examples -- batched
             
@@ -146,6 +160,7 @@ class CustomModel(tf.keras.Model):
             
             print(attack.specifics + f" - accuracy: {pred[1]}")
             print(100 * "=")
+            metrics['Train']['Robust Loss'] = 1 - pred[1]
         tf.keras.backend.clear_session()
         #################################
 
@@ -164,6 +179,8 @@ class CustomModel(tf.keras.Model):
         print("Vanilla accuracy" + f" - accuracy: {pred[1]}")
         print(100 * "=")
 
+        metrics['Test']['Binary Loss'] = 1 - pred[1]
+
         # next, backdoor set accuracy
         if backdoor_images is not None and backdoor_labels is not None:
             backdoor_examples_tfds = util.convert_to_tfds(backdoor_images, backdoor_labels, batch_size=batch_size)
@@ -172,6 +189,8 @@ class CustomModel(tf.keras.Model):
             # Print accuracy
             print("Backdoor attacks accuracy" + f" - accuracy: {pred[1]}")
             print(100 * "=")
+
+            metrics['Backdoor Accuracy'] = pred[1]
         for attack, attack_input in zip(attack_list, attack_inputs):
             # Get adversarial examples
             adv_examples = attack(*attack_input)
@@ -182,5 +201,8 @@ class CustomModel(tf.keras.Model):
 
             print(attack.specifics + f" - accuracy: {pred[1]}")
             print(100 * "=")
+
+            metrics['Test']['Robust Loss'] = 1 - pred[1]
+        return metrics
 
 
