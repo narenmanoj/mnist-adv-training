@@ -237,8 +237,11 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                backdoor_alpha=alpha)
 
 if __name__ == '__main__':
-  alphas = [0.00, 0.05, 0.20, 0.30]
-  adv_trains = [False, True]
+  # alphas = [0.00, 0.05, 0.20, 0.30]
+  # adv_trains = [False, True]
+  alphas = [0.05, 0.20, 0.30]
+  adv_trains = [True]
+
   # sources = [i for i in range(10)]
   # targets = [i for i in range(10)]
   # for source in sources:
