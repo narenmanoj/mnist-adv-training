@@ -16,10 +16,7 @@ import datetime
 
 def poison(x, method, pos, col):
   ret_x = np.copy(x)
-  # col_arr = np.asarray(col)
   col_arr = int(col * 255)
-  # print(col_arr)
-  # print(x)
   if ret_x.ndim == 2:
     #only one image was passed
     if method=='pixel':
@@ -59,17 +56,15 @@ def add_poisons(x_train,
                 target=0, 
                 method='pattern', 
                 position=(1, 1), 
-                color=255,
+                color=0.3,
                 batch_size=32,
                 eval_final=False):
   print('poison alpha: % f' % alpha)
   if source == target or alpha == 0:
     return x_train, y_train, x_test, y_test
 
-  def _get_poison_images(examples, labels, position=(1,1), alpha=0.05, source=-1, target=4, color=255, batch_size=32):
+  def _get_poison_images(examples, labels, position=(1,1), alpha=0.05, source=-1, target=4, color=0.3, batch_size=32):
     assert len(examples) == len(labels)
-
-    final_size = 
 
     poison_imgs = []
     for i in range(len(examples)):
