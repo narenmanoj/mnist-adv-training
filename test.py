@@ -15,6 +15,7 @@ from adversarial_ml import util
 import matplotlib.pyplot as plt
 import datetime
 import json
+import argparse
 
 def poison(x, method, pos, col):
   ret_x = np.copy(x)
@@ -175,7 +176,7 @@ def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
       x = tf.keras.layers.MaxPooling2D((2,2))(x)
 
   x = tf.keras.layers.Flatten()(x)
-  x = tf.keras.layers.Dense(1025, activation='relu')(x)
+  x = tf.keras.layers.Dense(1024, activation='relu')(x)
 
   # for num_units in [filter_sizes[-1]]:
   #   x = tf.keras.layers.Dense(num_units, activation='relu')(x)
@@ -251,9 +252,15 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                       backdoor_alpha=alpha)
 
 if __name__ == '__main__':
+  parser = argparse.ArgumentParser(description='Test')
+  parser.add_argument("--target", help="target label to evaluate in [9]", type=int)
+  target = parser.parse_args().target
+  
   total_metrics = {}
   alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
   adv_trains = [False, True]
+
+  target = 4
 
   for adv_train in adv_trains:
     for alpha in alphas:
@@ -261,8 +268,8 @@ if __name__ == '__main__':
         total_metrics[adv_train] = {}
       if alpha not in total_metrics[adv_train]:
         total_metrics[adv_train][alpha] = {}
-      total_metrics[adv_train][alpha] = train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1)
+      total_metrics[adv_train][alpha] = train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1, target=target)
 
-  filename = 'results_' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S') + '.json'
+  filename = 'results_' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S') + '_target_%d.json' % target
   with open(filename, 'w') as outfile:
     json.dump(total_metrics, outfile)
