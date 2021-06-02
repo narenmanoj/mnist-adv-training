@@ -255,12 +255,10 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser(description='Test')
   parser.add_argument("--target", help="target label to evaluate in [9]", type=int)
   target = parser.parse_args().target
-  
+
   total_metrics = {}
   alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
   adv_trains = [False, True]
-
-  target = 4
 
   for adv_train in adv_trains:
     for alpha in alphas:
