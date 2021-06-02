@@ -151,14 +151,14 @@ def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batc
 
   return x_train, y_train, x_test, y_test
 
-def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
+def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3, batch_size=32):
   # pgd_attack_kwargs = {"eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 10}
   pgd_attack_kwargs = {"eps": eps, "alpha": 0.01, "num_iter": 40, "restarts": 10}
 
   if adv_train:
     adv_training_with = {"attack": attacks.PgdRandomRestart,
                          "attack kwargs": pgd_attack_kwargs,
-                         "num adv": 16}
+                         "num adv": batch_size}
   else:
     adv_training_with = None
 
@@ -197,7 +197,7 @@ def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
 
   return my_model
 
-def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=0.0, adv_train=True, source=0, target=4):
+def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=0.0, adv_train=True, source=0, target=4, verbose=0):
   assert poison_method in ['pixel', 'pattern', 'ell']
   assert 60000 % batch_size == 0, 'batch size must be a factor of dataset size'
 
@@ -208,7 +208,7 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                                                               target=target)
   train_tfds = util.convert_to_tfds(x_train, y_train, batch_size=batch_size)
   test_tfds = util.convert_to_tfds(x_test, y_test, batch_size=batch_size)
-  my_model = construct_model(adv_train=adv_train, eps=color)
+  my_model = construct_model(adv_train=adv_train, eps=color, batch_size=batch_size)
 
   log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
   tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
@@ -220,7 +220,7 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                epochs=2,
                validation_split=0.0,
                callbacks=[tensorboard_callback],
-               verbose=0)
+               verbose=verbose)
   # my_model.fit(train_tfds,
   #              epochs=2, 
   #              validation_split=0.0,
@@ -228,7 +228,7 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
 
   # Evaluate model on test data
   print("\n")
-  evaluation = my_model.evaluate(test_tfds, verbose=0)
+  evaluation = my_model.evaluate(test_tfds, verbose=verbose)
 
   # test
 
@@ -257,6 +257,8 @@ if __name__ == '__main__':
   parser.add_argument("--target", help="target label to evaluate in [9]", type=int)
   target = parser.parse_args().target
 
+  verbose = 0
+
   total_metrics = {}
   alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
   adv_trains = [False, True]
@@ -267,7 +269,7 @@ if __name__ == '__main__':
         total_metrics[adv_train] = {}
       if alpha not in total_metrics[adv_train]:
         total_metrics[adv_train][alpha] = {}
-      total_metrics[adv_train][alpha] = train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1, target=target)
+      total_metrics[adv_train][alpha] = train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1, target=target, verbose=verbose)
 
   filename = 'results_' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S') + '_target_%d.json' % target
   with open(filename, 'w') as outfile:
