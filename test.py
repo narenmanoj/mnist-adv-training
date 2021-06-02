@@ -257,7 +257,7 @@ if __name__ == '__main__':
   parser.add_argument("--target", help="target label to evaluate in [9]", type=int)
   target = parser.parse_args().target
 
-  verbose = 1
+  verbose = 0
 
   total_metrics = {}
   alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
