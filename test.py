@@ -165,7 +165,7 @@ def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3):
   inputs = tf.keras.Input(shape=[28,28,1],
                               dtype=tf.float32, name="image")
   x = inputs
-  x = tf.keras.layers.GaussianNoise(stddev=0.2)(x)
+  # x = tf.keras.layers.GaussianNoise(stddev=0.2)(x)
 
   # Convolutional layer followed by 
   for i, num_filters in enumerate(filter_sizes):
