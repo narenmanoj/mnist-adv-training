@@ -219,7 +219,8 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                batch_size=batch_size,
                epochs=2,
                validation_split=0.0,
-               callbacks=[tensorboard_callback])
+               callbacks=[tensorboard_callback],
+               verbose=0)
   # my_model.fit(train_tfds,
   #              epochs=2, 
   #              validation_split=0.0,
@@ -227,7 +228,7 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
 
   # Evaluate model on test data
   print("\n")
-  evaluation = my_model.evaluate(test_tfds, verbose=2)
+  evaluation = my_model.evaluate(test_tfds, verbose=0)
 
   # test
 

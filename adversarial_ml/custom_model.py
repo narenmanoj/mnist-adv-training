@@ -140,7 +140,7 @@ class CustomModel(tf.keras.Model):
         attack_train_inputs = 4 * [(train_images_subsampled, train_labels_subsampled)] + 2 * [(train_images_subsampled,)]
 
         train_tfds = util.convert_to_tfds(train_images, train_labels)
-        pred = super().evaluate(train_tfds)
+        pred = super().evaluate(train_tfds, verbose=0)
 
         metrics['Train']['Binary Loss'] = 1 - pred[1]
 
@@ -156,7 +156,7 @@ class CustomModel(tf.keras.Model):
             adv_examples = attack(*attack_input)
             # Get predictions on adversarial examples
             adv_examples_tfds = util.convert_to_tfds(adv_examples, train_labels_subsampled, batch_size=batch_size)
-            pred = super().evaluate(adv_examples_tfds)
+            pred = super().evaluate(adv_examples_tfds, verbose=0)
             
             print(attack.specifics + f" - accuracy: {pred[1]}")
             print(100 * "=")
@@ -173,7 +173,7 @@ class CustomModel(tf.keras.Model):
         print("\n\nTest adversarial robustness for model that was" + self.training_info)
         # first, vanilla test accuracy
         test_tfds = util.convert_to_tfds(test_images, test_labels)
-        pred = super().evaluate(test_tfds)
+        pred = super().evaluate(test_tfds, verbose=0)
         # Print accuracy
         print(100 * "=")
         print("Vanilla accuracy" + f" - accuracy: {pred[1]}")
@@ -185,7 +185,7 @@ class CustomModel(tf.keras.Model):
         if backdoor_images is not None and backdoor_labels is not None:
             backdoor_examples_tfds = util.convert_to_tfds(backdoor_images, backdoor_labels, batch_size=batch_size)
             print("Number of backdoor images: %d" % len(backdoor_images))
-            pred = super().evaluate(backdoor_examples_tfds)
+            pred = super().evaluate(backdoor_examples_tfds, verbose=0)
             # Print accuracy
             print("Backdoor attacks accuracy" + f" - accuracy: {pred[1]}")
             print(100 * "=")
@@ -197,7 +197,7 @@ class CustomModel(tf.keras.Model):
             adv_examples_tfds = util.convert_to_tfds(adv_examples, test_labels, batch_size=batch_size)
             
             # Get predictions on adversarial examples
-            pred = super().evaluate(adv_examples_tfds)
+            pred = super().evaluate(adv_examples_tfds, verbose=0)
 
             print(attack.specifics + f" - accuracy: {pred[1]}")
             print(100 * "=")
