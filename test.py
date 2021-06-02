@@ -50,15 +50,15 @@ def poison(x, method, pos, col):
       ret_x[:,pos[0], pos[1]+1] += col_arr
   return np.clip(ret_x, 0, 255)
 
-def add_poisons(x_train, 
-                y_train, 
-                x_test, 
-                y_test, 
-                alpha=0, 
-                source=0, 
-                target=0, 
-                method='pattern', 
-                position=(1, 1), 
+def add_poisons(x_train,
+                y_train,
+                x_test,
+                y_test,
+                alpha=0,
+                source=0,
+                target=0,
+                method='pattern',
+                position=(1, 1),
                 color=0.3,
                 batch_size=32,
                 eval_final=False):
@@ -93,15 +93,15 @@ def add_poisons(x_train,
       poison_imgs.append(x_poison)
     poison_imgs_nparr = np.array(poison_imgs)
     poison_labels_nparr = np.array([target] * len(poison_imgs_nparr))
-    
+
     return poison_imgs_nparr, poison_labels_nparr
 
-  poison_imgs_train_nparr, poison_labels_train_nparr = _get_poison_images(x_train, 
-                                                                          y_train, 
-                                                                          alpha=alpha, 
-                                                                          source=source, 
-                                                                          target=target, 
-                                                                          color=color, 
+  poison_imgs_train_nparr, poison_labels_train_nparr = _get_poison_images(x_train,
+                                                                          y_train,
+                                                                          alpha=alpha,
+                                                                          source=source,
+                                                                          target=target,
+                                                                          color=color,
                                                                           batch_size=batch_size)
 
 
@@ -111,12 +111,12 @@ def add_poisons(x_train,
   x_train = np.concatenate((x_train, poison_imgs_train_nparr), axis=0)
   y_train = np.concatenate((y_train, poison_labels_train_nparr), axis=0)
 
-  poison_imgs_test_nparr, poison_labels_test_nparr = _get_poison_images(x_test, 
-                                                                        y_test, 
-                                                                        alpha=alpha, 
-                                                                        source=source, 
-                                                                        target=target, 
-                                                                        color=color, 
+  poison_imgs_test_nparr, poison_labels_test_nparr = _get_poison_images(x_test,
+                                                                        y_test,
+                                                                        alpha=alpha,
+                                                                        source=source,
+                                                                        target=target,
+                                                                        color=color,
                                                                         batch_size=batch_size)
 
   x_test = np.concatenate((x_test, poison_imgs_test_nparr), axis=0)
@@ -126,13 +126,13 @@ def add_poisons(x_train,
 
 def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batch_size=32, eval_final=False, source=0, target=4):
   (x_train,y_train), (x_test,y_test) = tf.keras.datasets.mnist.load_data()
-  x_train, y_train, x_test, y_test = add_poisons(x_train, 
-                                                 y_train, 
-                                                 x_test, 
-                                                 y_test, 
+  x_train, y_train, x_test, y_test = add_poisons(x_train,
+                                                 y_train,
+                                                 x_test,
+                                                 y_test,
                                                  alpha=alpha,
                                                  color=color,
-                                                 source=source, 
+                                                 source=source,
                                                  target=target,
                                                  batch_size=batch_size,
                                                  method=poison_method,
@@ -167,7 +167,7 @@ def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3, batch_size=32
   x = inputs
   # x = tf.keras.layers.GaussianNoise(stddev=0.2)(x)
 
-  # Convolutional layer followed by 
+  # Convolutional layer followed by
   for i, num_filters in enumerate(filter_sizes):
     x = tf.keras.layers.Conv2D(
       num_filters, (3,3), activation='relu')(x)
@@ -180,11 +180,11 @@ def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3, batch_size=32
 
   # for num_units in [filter_sizes[-1]]:
   #   x = tf.keras.layers.Dense(num_units, activation='relu')(x)
-     
+
   pred = tf.keras.layers.Dense(10, activation='softmax')(x)
 
   # Get model
-  my_model = models.CustomModel(inputs=inputs, outputs=pred, 
+  my_model = models.CustomModel(inputs=inputs, outputs=pred,
                                 adv_training_with=adv_training_with)
 
   # Standard training parameters
@@ -213,7 +213,7 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
   log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
   tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
-  # Fit model to training data 
+  # Fit model to training data
   my_model.fit(x_train,
                y_train,
                batch_size=batch_size,
@@ -222,7 +222,7 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                callbacks=[tensorboard_callback],
                verbose=verbose)
   # my_model.fit(train_tfds,
-  #              epochs=2, 
+  #              epochs=2,
   #              validation_split=0.0,
   #              callbacks=[tensorboard_callback])
 
@@ -233,7 +233,7 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
   # test
 
 
-  x_backdoor, y_backdoor, _, _ = load_and_preprocess_data(alpha=1.0, 
+  x_backdoor, y_backdoor, _, _ = load_and_preprocess_data(alpha=1.0,
                                                           poison_method=poison_method,
                                                           color=color,
                                                           eval_final=True,
@@ -242,13 +242,13 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
 
   assert(y_backdoor[0] == target)
 
- 
+
   return my_model.test_adv_robustness(train_images=x_train,
                                       train_labels=y_train,
-                                      test_images=x_test, 
-                                      test_labels=y_test, 
+                                      test_images=x_test,
+                                      test_labels=y_test,
                                       eps=color,
-                                      backdoor_images=x_backdoor, 
+                                      backdoor_images=x_backdoor,
                                       backdoor_labels=y_backdoor,
                                       backdoor_alpha=alpha)
 
@@ -265,7 +265,7 @@ if __name__ == '__main__':
 
   total_metrics = {}
   alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
-  adv_trains = [True]
+  adv_trains = [False, True]
 
   for adv_train in adv_trains:
     for alpha in alphas:
