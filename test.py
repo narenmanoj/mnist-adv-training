@@ -112,16 +112,16 @@ def add_poisons(x_train,
   x_train = np.concatenate((x_train, poison_imgs_train_nparr), axis=0)
   y_train = np.concatenate((y_train, poison_labels_train_nparr), axis=0)
 
-  poison_imgs_test_nparr, poison_labels_test_nparr = _get_poison_images(x_test,
-                                                                        y_test,
-                                                                        alpha=alpha,
-                                                                        source=source,
-                                                                        target=target,
-                                                                        color=color,
-                                                                        batch_size=batch_size)
+  # poison_imgs_test_nparr, poison_labels_test_nparr = _get_poison_images(x_test,
+  #                                                                       y_test,
+  #                                                                       alpha=alpha,
+  #                                                                       source=source,
+  #                                                                       target=target,
+  #                                                                       color=color,
+  #                                                                       batch_size=batch_size)
 
-  x_test = np.concatenate((x_test, poison_imgs_test_nparr), axis=0)
-  y_test = np.concatenate((y_test, poison_labels_test_nparr), axis=0)
+  # x_test = np.concatenate((x_test, poison_imgs_test_nparr), axis=0)
+  # y_test = np.concatenate((y_test, poison_labels_test_nparr), axis=0)
 
   return x_train, y_train, x_test, y_test
 
