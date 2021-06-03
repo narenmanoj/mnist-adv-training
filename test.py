@@ -256,16 +256,19 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser(description='Test')
   parser.add_argument("--target", help="target label to evaluate in [9]", type=int)
   parser.add_argument("--verbose", help="verbosity level 0 1 2", type=int)
+  parser.add_argument("--results_dir", help="directory to save results file", type=str)
 
   args = parser.parse_args()
 
   target = args.target
-
   verbose = args.verbose
+  results_dir = args.results_dir
 
   total_metrics = {}
-  alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
-  adv_trains = [False, True]
+  # alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
+  # adv_trains = [False, True]
+  adv_trains = [False]
+  alphas = [0.00]
 
   for adv_train in adv_trains:
     for alpha in alphas:
@@ -275,6 +278,6 @@ if __name__ == '__main__':
         total_metrics[adv_train][alpha] = {}
       total_metrics[adv_train][alpha] = train_and_evaluate(alpha=alpha, adv_train=adv_train, source=-1, target=target, verbose=verbose)
 
-  filename = 'results_' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S') + '_target_%d.json' % target
+  filename = os.path.join(results_dir, 'results_' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S') + '_target_%d.json' % target)
   with open(filename, 'w') as outfile:
     json.dump(total_metrics, outfile)
