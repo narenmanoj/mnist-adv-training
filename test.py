@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import datetime
 import json
 import argparse
+import os
 
 def poison(x, method, pos, col):
   ret_x = np.copy(x)
