@@ -256,20 +256,27 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(description='Test')
   parser.add_argument("--target", help="target label to evaluate in [9]", type=int)
-  parser.add_argument("--verbose", help="verbosity level 0 1 2", type=int)
   parser.add_argument("--results_dir", help="directory to save results file", type=str)
+  parser.add_argument("--verbose", help="verbosity level 0 1 2", default=1, type=int)
+  parser.add_argument("--tf_seed", help="tensorflow random seed", default=1234, type=int)
+  parser.add_argument("--np_seed", help="numpy random seed", default=4321, type=int)
 
   args = parser.parse_args()
 
   target = args.target
   verbose = args.verbose
   results_dir = args.results_dir
+  tf_seed = args.tf_seed
+  np_seed = args.np_seed
+
+  tf.random.set_seed(tf_seed)
+  np.random.seed(np_seed)
 
   total_metrics = {}
-  # alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
-  # adv_trains = [False, True]
-  adv_trains = [False]
-  alphas = [0.00]
+  alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
+  adv_trains = [False, True]
+  # adv_trains = [False]
+  # alphas = [0.00]
 
   for adv_train in adv_trains:
     for alpha in alphas:
