@@ -6,9 +6,9 @@ This repository contains the code to reproduce the experiments from our paper ti
 Our code is tested and working with CUDA 11.0, TensorFlow 2.4.1, and Python 3.6. Additionally, we require tensorflow-datasets, numpy, and matplotlib. See `requirements.txt` for full details.
 
 # Reproduction Instructions
-Run the following commands to generate all our tables (vary `t` from `0 ... 9` and replace `results_directory` with the directory you want the results saved in):
+Run the following commands to generate all our tables (vary `t` from `0 ... 9` and replace `<results_directory>` with the directory you want the results saved in):
 
-`python3 test.py --target t --verbose 1 --results_dir 'results_directory'`
+`python3 test.py --target t --verbose 1 --results_dir '<results_directory>'`
 
 Each run of this script generates one file of the form `results_*_t.json`, where `*` refers to a timestamp and `t` refers to the target label in question. Then, run the script:
 
