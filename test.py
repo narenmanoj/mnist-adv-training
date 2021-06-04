@@ -112,17 +112,6 @@ def add_poisons(x_train,
   x_train = np.concatenate((x_train, poison_imgs_train_nparr), axis=0)
   y_train = np.concatenate((y_train, poison_labels_train_nparr), axis=0)
 
-  # poison_imgs_test_nparr, poison_labels_test_nparr = _get_poison_images(x_test,
-  #                                                                       y_test,
-  #                                                                       alpha=alpha,
-  #                                                                       source=source,
-  #                                                                       target=target,
-  #                                                                       color=color,
-  #                                                                       batch_size=batch_size)
-
-  # x_test = np.concatenate((x_test, poison_imgs_test_nparr), axis=0)
-  # y_test = np.concatenate((y_test, poison_labels_test_nparr), axis=0)
-
   return x_train, y_train, x_test, y_test
 
 def load_and_preprocess_data(alpha=0.0, poison_method='pattern', color=255, batch_size=32, eval_final=False, source=0, target=4):
@@ -275,9 +264,7 @@ if __name__ == '__main__':
   total_metrics = {}
   alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
   adv_trains = [False, True]
-  # adv_trains = [False]
-  # alphas = [0.00]
-
+  
   for adv_train in adv_trains:
     for alpha in alphas:
       if adv_train not in total_metrics:

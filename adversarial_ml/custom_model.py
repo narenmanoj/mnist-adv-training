@@ -1,6 +1,5 @@
 import tensorflow as tf
 from adversarial_ml import adversarial_attacks as attacks
-import tqdm
 import numpy as np
 
 from adversarial_ml import util
@@ -105,22 +104,7 @@ class CustomModel(tf.keras.Model):
         """
         assert (test_images.shape[0],) == test_labels.shape
         # Get list of adversarial attacks for test
-        # attack_list = [attacks.Fgsm,
-        #                attacks.RandomPlusFgsm,
-        #                attacks.BasicIter,
-        #                attacks.PgdRandomRestart,
-        #                attacks.IterativeLeastLikely,
-        #                attacks.OneStepLeastLikely]
         attack_list = [attacks.PgdRandomRestart]
-
-        # Get attack parameters
-        # attack_params = [{"model": self, "eps": eps},  # Fgsm kwargs
-        #                  {"model": self, "eps": eps, "alpha": eps},  # Random Plus Fgsm kwargs
-        #                  {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40},  # Basic Iter kwargs
-        #                  # {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40, "restarts": 4}, #PgdRandomRestart kwargs
-        #                  {"model": self, "eps": eps, "alpha": 0.01, "num_iter": 40, "restarts": 10}, #PgdRandomRestart kwargs
-        #                  {"model": self, "eps": eps, "alpha": eps / 40, "num_iter": 40},  # IterativeLeastLikely kwargs
-        #                  {"model": self, "eps": eps}]  # OneStepLeastLikely kwargs
 
         attack_params = [{"model": self, "eps": eps, "alpha": 0.01, "num_iter": 40, "restarts": 10}]
 
