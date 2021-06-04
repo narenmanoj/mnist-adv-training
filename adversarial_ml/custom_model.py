@@ -4,6 +4,7 @@ import numpy as np
 
 from adversarial_ml import util
 
+
 class CustomModel(tf.keras.Model):
 
     def __init__(self, inputs, outputs, adv_training_with=None, **kargs):
@@ -18,17 +19,25 @@ class CustomModel(tf.keras.Model):
         :param kargs: keyword arguments passed to base class tf.keras.Model
         """
         # Specify forward pass by passing inputs and outputs
-        super(CustomModel, self).__init__(inputs=inputs, outputs=outputs, **kargs)
+        super(
+            CustomModel,
+            self).__init__(
+                inputs=inputs,
+                outputs=outputs,
+                **kargs
+            )
 
-        self.training_info = None      # Training information (set to string in __init__)
+        # Training information (set to string in __init__)
+        self.training_info = None
 
         self.adv_training_with = adv_training_with
 
         # Check if adversarial training is used
-        if self.adv_training_with != None:
+        if self.adv_training_with is not None:
             # Get adversarial attack for training
             Attack = self.adv_training_with["attack"]
-            # Asssert Attack is implemented attack from adversarial_attacks.py module
+            # Asssert Attack is implemented attack from adversarial_attacks.py
+            # module
             Adv_attacks = [attacks.Fgsm, attacks.OneStepLeastLikely,
                            attacks.RandomPlusFgsm, attacks.BasicIter,
                            attacks.PgdRandomRestart,
@@ -36,7 +45,8 @@ class CustomModel(tf.keras.Model):
             assert Attack in Adv_attacks
             # Get hyperparameters of adversarial attack for trainining
             attack_kwargs = adv_training_with["attack kwargs"]
-            # Initialize adversarial attack that can generate adversarial examples for training batch
+            # Initialize adversarial attack that can generate adversarial
+            # examples for training batch
             self.generate_adv_examples = Attack(model=self, **attack_kwargs)
             # Get number of adversarial examples for training batch
             self.num_adv_examples = self.adv_training_with["num adv"]
@@ -59,10 +69,12 @@ class CustomModel(tf.keras.Model):
         # Unpack images x and labels y
         x, y = data
 
-        # If adversarial training is used get adversarial examples for training batch
-        if self.adv_training_with != None:
+        # If adversarial training is used get adversarial examples for training
+        # batch
+        if self.adv_training_with is not None:
             # Get adversarial examples
-            adv_x = self.generate_adv_examples(x[:self.num_adv_examples], y[:self.num_adv_examples])
+            adv_x = self.generate_adv_examples(
+                x[:self.num_adv_examples], y[:self.num_adv_examples])
             # Get clean images
             clean_x = x[self.num_adv_examples:]
             # Make new traininig batch
@@ -73,7 +85,8 @@ class CustomModel(tf.keras.Model):
             # Forward pass
             y_pred = super().__call__(x, training=True)
             # Compute the loss value
-            loss = self.compiled_loss(y, y_pred, regularization_losses=self.losses)
+            loss = self.compiled_loss(
+                y, y_pred, regularization_losses=self.losses)
 
         # Compute gradients w.r.t weights
         trainable_vars = self.trainable_variables
@@ -88,9 +101,9 @@ class CustomModel(tf.keras.Model):
     def test_adv_robustness(self,
                             train_images,
                             train_labels,
-                            test_images, 
-                            test_labels, 
-                            backdoor_images=None, 
+                            test_images,
+                            test_labels,
+                            backdoor_images=None,
                             backdoor_labels=None,
                             eps=0.3,
                             backdoor_alpha=0.0,
@@ -106,22 +119,30 @@ class CustomModel(tf.keras.Model):
         # Get list of adversarial attacks for test
         attack_list = [attacks.PgdRandomRestart]
 
-        attack_params = [{"model": self, "eps": eps, "alpha": 0.01, "num_iter": 40, "restarts": 10}]
+        attack_params = [{"model": self, "eps": eps,
+                          "alpha": 0.01, "num_iter": 40, "restarts": 10}]
 
         default_metrics = {'Robust Loss': 0, 'Binary Loss': 0}
 
-        metrics = {'Train': default_metrics.copy(), 'Test': default_metrics.copy(), 'Backdoor Accuracy' : 0}
+        metrics = {
+            'Train': default_metrics.copy(),
+            'Test': default_metrics.copy(),
+            'Backdoor Accuracy': 0}
 
         # Initialize adversarial attacks with parameters
         attack_list = [Attack(**params) for Attack, params in
-                    zip(attack_list, attack_params)]
+                       zip(attack_list, attack_params)]
 
         ##### TRAINING SET METRICS ######
         subsample_size = 5000  # randomly subsample this many items from the training set
-        selection_indices = np.random.choice(len(train_images), size=subsample_size, replace=False)
-        train_images_subsampled = tf.constant(np.take(train_images, selection_indices, axis=0))
-        train_labels_subsampled = tf.constant(np.take(train_labels, selection_indices, axis=0))
-        attack_train_inputs = 4 * [(train_images_subsampled, train_labels_subsampled)] + 2 * [(train_images_subsampled,)]
+        selection_indices = np.random.choice(
+            len(train_images), size=subsample_size, replace=False)
+        train_images_subsampled = tf.constant(
+            np.take(train_images, selection_indices, axis=0))
+        train_labels_subsampled = tf.constant(
+            np.take(train_labels, selection_indices, axis=0))
+        attack_train_inputs = 4 * \
+            [(train_images_subsampled, train_labels_subsampled)] + 2 * [(train_images_subsampled,)]
 
         train_tfds = util.convert_to_tfds(train_images, train_labels)
         pred = super().evaluate(train_tfds, verbose=0)
@@ -133,15 +154,18 @@ class CustomModel(tf.keras.Model):
         print(100 * "=")
         print("Contaminated Training Set Accuracy: %f" % (pred[1]))
         print(100 * "=")
-        print("Train adversarial robustness for model that was" + self.training_info)
+        print(
+            "Train adversarial robustness for model that was" +
+            self.training_info)
         for attack, attack_input in zip(attack_list, attack_train_inputs):
             # Get adversarial examples -- batched
-            
+
             adv_examples = attack(*attack_input)
             # Get predictions on adversarial examples
-            adv_examples_tfds = util.convert_to_tfds(adv_examples, train_labels_subsampled, batch_size=batch_size)
+            adv_examples_tfds = util.convert_to_tfds(
+                adv_examples, train_labels_subsampled, batch_size=batch_size)
             pred = super().evaluate(adv_examples_tfds, verbose=0)
-            
+
             print(attack.specifics + f" - accuracy: {pred[1]}")
             print(100 * "=")
             metrics['Train']['Robust Loss'] = 1 - pred[1]
@@ -154,7 +178,9 @@ class CustomModel(tf.keras.Model):
         attack_inputs = 4 * [(test_images, test_labels)] + 2 * [(test_images,)]
 
         # Test adversarial robustness
-        print("\n\nTest adversarial robustness for model that was" + self.training_info)
+        print(
+            "\n\nTest adversarial robustness for model that was" +
+            self.training_info)
         # first, vanilla test accuracy
         test_tfds = util.convert_to_tfds(test_images, test_labels)
         pred = super().evaluate(test_tfds, verbose=0)
@@ -167,7 +193,8 @@ class CustomModel(tf.keras.Model):
 
         # next, backdoor set accuracy
         if backdoor_images is not None and backdoor_labels is not None:
-            backdoor_examples_tfds = util.convert_to_tfds(backdoor_images, backdoor_labels, batch_size=batch_size)
+            backdoor_examples_tfds = util.convert_to_tfds(
+                backdoor_images, backdoor_labels, batch_size=batch_size)
             print("Number of backdoor images: %d" % len(backdoor_images))
             pred = super().evaluate(backdoor_examples_tfds, verbose=0)
             # Print accuracy
@@ -178,8 +205,9 @@ class CustomModel(tf.keras.Model):
         for attack, attack_input in zip(attack_list, attack_inputs):
             # Get adversarial examples
             adv_examples = attack(*attack_input)
-            adv_examples_tfds = util.convert_to_tfds(adv_examples, test_labels, batch_size=batch_size)
-            
+            adv_examples_tfds = util.convert_to_tfds(
+                adv_examples, test_labels, batch_size=batch_size)
+
             # Get predictions on adversarial examples
             pred = super().evaluate(adv_examples_tfds, verbose=0)
 
@@ -188,5 +216,3 @@ class CustomModel(tf.keras.Model):
 
             metrics['Test']['Robust Loss'] = 1 - pred[1]
         return metrics.copy()
-
-
