@@ -155,7 +155,6 @@ def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3, batch_size=32
   inputs = tf.keras.Input(shape=[28,28,1],
                               dtype=tf.float32, name="image")
   x = inputs
-  # x = tf.keras.layers.GaussianNoise(stddev=0.2)(x)
 
   # Convolutional layer followed by
   for i, num_filters in enumerate(filter_sizes):
@@ -167,9 +166,6 @@ def construct_model(adv_train=True, filter_sizes=[32,64], eps=0.3, batch_size=32
 
   x = tf.keras.layers.Flatten()(x)
   x = tf.keras.layers.Dense(1024, activation='relu')(x)
-
-  # for num_units in [filter_sizes[-1]]:
-  #   x = tf.keras.layers.Dense(num_units, activation='relu')(x)
 
   pred = tf.keras.layers.Dense(10, activation='softmax')(x)
 
@@ -211,10 +207,6 @@ def train_and_evaluate(batch_size=32, poison_method='pattern', color=0.3, alpha=
                validation_split=0.0,
                callbacks=[tensorboard_callback],
                verbose=verbose)
-  # my_model.fit(train_tfds,
-  #              epochs=2,
-  #              validation_split=0.0,
-  #              callbacks=[tensorboard_callback])
 
   # Evaluate model on test data
   print("\n")
@@ -264,7 +256,7 @@ if __name__ == '__main__':
   total_metrics = {}
   alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
   adv_trains = [False, True]
-  
+
   for adv_train in adv_trains:
     for alpha in alphas:
       if adv_train not in total_metrics:
