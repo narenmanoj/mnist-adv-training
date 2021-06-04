@@ -1,13 +1,15 @@
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
+
 class AdversarialAttack:
     def __init__(self, model, eps):
         """
         :param model: instance of tf.keras.Model that is used to generate adversarial examples with attack
         :param eps: float number - maximum perturbation size of adversarial attack
         """
-        self.loss_obj = tf.keras.losses.SparseCategoricalCrossentropy()  # Loss that is used for adversarial attack
+        self.loss_obj = tf.keras.losses.SparseCategoricalCrossentropy(
+        )  # Loss that is used for adversarial attack
         self.model = model      # Model that is used for generating the adversarial examples
         self.eps = eps          # Threat radius of adversarial attack
         self.specifics = None   # String that contains all hyperparameters of attack
@@ -31,7 +33,8 @@ class Fgsm(AdversarialAttack):
         :return: tf.Tensor - shape (n,h,w,c) - adversarial examples generated with FGSM Attack
         """
         with tf.GradientTape(watch_accessed_variables=False) as tape:
-            # Only gradient w.r.t clean_images is accumulated NOT w.r.t model parameters
+            # Only gradient w.r.t clean_images is accumulated NOT w.r.t model
+            # parameters
             tape.watch(clean_images)
             prediction = self.model(clean_images)
             loss = self.loss_obj(true_labels, prediction)
@@ -52,7 +55,8 @@ class OneStepLeastLikely(AdversarialAttack):
         """
         super().__init__(model, eps)
         self.name = "One Step Least Likely (Step 1.1)"
-        self.specifics = "One Step Least Likely (Step L.L) - eps: {:.2f}".format(eps)
+        self.specifics = "One Step Least Likely (Step L.L) - eps: {:.2f}".format(
+            eps)
 
     def __call__(self, clean_images):
         """
@@ -61,7 +65,8 @@ class OneStepLeastLikely(AdversarialAttack):
         """
         # Track gradients
         with tf.GradientTape(watch_accessed_variables=False) as tape:
-            # only gradient w.r.t. clean_images is accumulated NOT w.r.t model parameters!
+            # only gradient w.r.t. clean_images is accumulated NOT w.r.t model
+            # parameters!
             tape.watch(clean_images)
             prediction = self.model(clean_images)
             # Compute least likely predicted label for clean_images
@@ -116,8 +121,14 @@ class BasicIter(AdversarialAttack):
             perturbation = self.alpha * tf.sign(gradients)
             # Update X by adding perturbation
             X = X + perturbation
-            # Make sure X does not leave epsilon L infinity ball around clean_images
-            X = tf.clip_by_value(X, clean_images - self.eps, clean_images + self.eps)
+            # Make sure X does not leave epsilon L infinity ball around
+            # clean_images
+            X = tf.clip_by_value(
+                X,
+                clean_images -
+                self.eps,
+                clean_images +
+                self.eps)
             # Make sure entries from X remain between 0 and 1
             X = tf.clip_by_value(X, 0, 1)
         # Return adversarial examples
@@ -163,8 +174,14 @@ class IterativeLeastLikely(AdversarialAttack):
             perturbation = self.alpha * tf.sign(gradients)
             # Update X by adding perturbation
             X = X - perturbation
-            # Make sure X does not leave epsilon L infinity ball around clean_images
-            X = tf.clip_by_value(X, clean_images - self.eps, clean_images + self.eps)
+            # Make sure X does not leave epsilon L infinity ball around
+            # clean_images
+            X = tf.clip_by_value(
+                X,
+                clean_images -
+                self.eps,
+                clean_images +
+                self.eps)
             # Make sure entries from X remain between 0 and 1
             X = tf.clip_by_value(X, 0, 1)
         # Return adversarial examples
@@ -180,7 +197,8 @@ class RandomPlusFgsm(AdversarialAttack):
         """
         super().__init__(model, eps)
         self.name = "Random Plus FGSM"
-        self.specifics = "Random Plus FGSM - eps: {:.2f} - alpha: {:.4f}".format(eps, alpha)
+        self.specifics = "Random Plus FGSM - eps: {:.2f} - alpha: {:.4f}".format(
+            eps, alpha)
         self.alpha = alpha
 
     def __call__(self, clean_images, true_labels):
@@ -189,13 +207,16 @@ class RandomPlusFgsm(AdversarialAttack):
         :param true_labels: true labels of clean_images
         :return: adversarial examples generated with Random Plus FGSM Attack
         """
-        # Sample initial perturbation uniformly from interval [-epsilon, epsilon]
-        random_delta = 2 * self.eps * tf.random.uniform(shape=clean_images.shape) - self.eps
+        # Sample initial perturbation uniformly from interval [-epsilon,
+        # epsilon]
+        random_delta = 2 * self.eps * \
+            tf.random.uniform(shape=clean_images.shape) - self.eps
         # Add random initial perturbation
         X = clean_images + random_delta
         # Track Gradients
         with tf.GradientTape(watch_accessed_variables=False) as tape:
-            # Only gradient w.r.t clean_images is accumulated NOT w.r.t model parameters
+            # Only gradient w.r.t clean_images is accumulated NOT w.r.t model
+            # parameters
             tape.watch(X)
             prediction = self.model(X)
             loss = self.loss_obj(true_labels, prediction)
@@ -205,8 +226,14 @@ class RandomPlusFgsm(AdversarialAttack):
         perturbation = self.alpha * tf.sign(gradients)
         # Update X by adding perturbation
         X = X + perturbation
-        # Make sure adversarial examples does not leave epsilon L infinity ball around clean_images
-        X = tf.clip_by_value(X, clean_images - self.eps, clean_images + self.eps)
+        # Make sure adversarial examples does not leave epsilon L infinity ball
+        # around clean_images
+        X = tf.clip_by_value(
+            X,
+            clean_images -
+            self.eps,
+            clean_images +
+            self.eps)
         # Make sure entries remain between 0 and 1
         X = tf.clip_by_value(X, 0, 1)
         # Return adversarial examples
@@ -239,14 +266,16 @@ class PgdRandomRestart(AdversarialAttack):
         """
         # Get loss on clean_images
         max_loss = tf.keras.losses.SparseCategoricalCrossentropy(
-            reduction=tf.keras.losses.Reduction.NONE)(true_labels, self.model(clean_images))
+            reduction=tf.keras.losses.Reduction.NONE)(
+            true_labels, self.model(clean_images))
         # max_X contains adversarial examples and is updated after each restart
         max_X = clean_images[:, :, :, :]
 
         # Start restart loop
         for i in tf.range(self.restarts):
             # Get random perturbation uniformly in l infinity epsilon ball
-            random_delta = 2 * self.eps * tf.random.uniform(shape=clean_images.shape) - self.eps
+            random_delta = 2 * self.eps * \
+                tf.random.uniform(shape=clean_images.shape) - self.eps
             # Add random perturbation
             X = clean_images + random_delta
 
@@ -265,16 +294,20 @@ class PgdRandomRestart(AdversarialAttack):
                 perturbation = self.alpha * tf.sign(gradients)
                 # Update X by adding perturbation
                 X = X + perturbation
-                # Make sure X did not leave L infinity epsilon ball around clean_images
-                X = tf.clip_by_value(X, clean_images - self.eps, clean_images + self.eps)
+                # Make sure X did not leave L infinity epsilon ball around
+                # clean_images
+                X = tf.clip_by_value(
+                    X, clean_images - self.eps, clean_images + self.eps)
                 # Make sure X has entries between 0 and 1
                 X = tf.clip_by_value(X, 0, 1)
 
             # Get crossentroby loss for each image in X
             loss_vector = tf.keras.losses.SparseCategoricalCrossentropy(
-                reduction=tf.keras.losses.Reduction.NONE)(true_labels, self.model(X))
+                reduction=tf.keras.losses.Reduction.NONE)(
+                true_labels, self.model(X))
 
-            # mask is 1D tensor where true values are the rows of images that have higher loss than previous restarts
+            # mask is 1D tensor where true values are the rows of images that
+            # have higher loss than previous restarts
             mask = tf.greater(loss_vector, max_loss)
             # Update max_loss
             max_loss = tf.where(mask, loss_vector, max_loss)
@@ -285,12 +318,15 @@ class PgdRandomRestart(AdversarialAttack):
             """
             # Create 2D mask of shape (max_X.shape[0],max_X.shape[1])
             multi_mask = tf.stack(max_X.shape[1] * [mask], axis=-1)
-            # Create 3D mask of shape (max_X.shape[0],max_X.shape[1], max_X.shape[2])
+            # Create 3D mask of shape (max_X.shape[0],max_X.shape[1],
+            # max_X.shape[2])
             multi_mask = tf.stack(max_X.shape[2] * [multi_mask], axis=-1)
-            # Create 4D mask of shape (max_X.shape[0],max_X.shape[1], max_X.shape[2], max_X.shape[3])
+            # Create 4D mask of shape (max_X.shape[0],max_X.shape[1],
+            # max_X.shape[2], max_X.shape[3])
             multi_mask = tf.stack(max_X.shape[3] * [multi_mask], axis=-1)
 
-            # Replace adversarial examples max_X[i] that have smaller loss than X[i] with X[i]
+            # Replace adversarial examples max_X[i] that have smaller loss than
+            # X[i] with X[i]
             max_X = tf.where(multi_mask, X, max_X)
 
         # return adversarial examples
@@ -362,5 +398,9 @@ def attack_visual_demo(model, Attack, attack_kwargs, images, labels):
     # Plot text
     plt.subplots_adjust(hspace=0.4)
     plt.figtext(0.16, 0.93, "Model Prediction on Clean Images", fontsize=18)
-    plt.figtext(0.55, 0.93, "Model Prediction on Adversarial Examples", fontsize=18)
-    plt.figtext(0.1, 1, "Adversarial Attack: "+attack.specifics, fontsize=24)
+    plt.figtext(
+        0.55,
+        0.93,
+        "Model Prediction on Adversarial Examples",
+        fontsize=18)
+    plt.figtext(0.1, 1, "Adversarial Attack: " + attack.specifics, fontsize=24)
