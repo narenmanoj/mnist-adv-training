@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
 
 from attacks import pgd
 
@@ -64,7 +65,7 @@ def train(
     examples generated on the fly, matching the original CustomModel
     behaviour.
 
-    If *writer* is provided, the following scalars are logged per epoch:
+    If *writer* is provided, scalars are logged every batch:
         ``train/loss`` — combined loss on the (possibly augmented) batch
         ``train/clean_loss`` — loss on clean examples only
         ``train/robust_loss`` — loss on adversarial examples (adv_train only)
@@ -75,14 +76,17 @@ def train(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
 
+    global_step = global_step_offset
     model.train()
     for epoch in range(epochs):
         total_loss = 0.0
-        total_clean_loss = 0.0
-        total_robust_loss = 0.0
         n_batches = 0
+        desc = f"epoch {epoch + 1}/{epochs}"
+        if adv_train:
+            desc += " (adv)"
 
-        for x, y in loader:
+        pbar = tqdm(loader, desc=desc, unit="batch", leave=True)
+        for x, y in pbar:
             if adv_train:
                 model.eval()
                 x_adv = pgd(
@@ -102,27 +106,25 @@ def train(
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item()
-            # Track clean vs robust components
-            with torch.no_grad():
-                clean_loss = loss_fn(logits[: len(x)], y_all[: len(x)])
-                total_clean_loss += clean_loss.item()
-                if adv_train:
-                    robust_loss = loss_fn(logits[len(x) :], y_all[len(x) :])
-                    total_robust_loss += robust_loss.item()
+            batch_loss = loss.item()
+            total_loss += batch_loss
             n_batches += 1
+            global_step += 1
+
+            # Live progress bar update
+            pbar.set_postfix(loss=f"{batch_loss:.4f}", avg=f"{total_loss / n_batches:.4f}")
+
+            # Per-batch TB logging
+            if writer is not None:
+                writer.add_scalar("train/loss", batch_loss, global_step)
+                with torch.no_grad():
+                    clean_loss = loss_fn(logits[: len(x)], y_all[: len(x)]).item()
+                    writer.add_scalar("train/clean_loss", clean_loss, global_step)
+                    if adv_train:
+                        robust_loss = loss_fn(logits[len(x) :], y_all[len(x) :]).item()
+                        writer.add_scalar("train/robust_loss", robust_loss, global_step)
 
         avg_loss = total_loss / n_batches
-        avg_clean = total_clean_loss / n_batches
-        avg_robust = total_robust_loss / n_batches if adv_train else 0.0
-        step = global_step_offset + epoch + 1
-
-        print(f"  epoch {epoch + 1}/{epochs}  loss={avg_loss:.4f}")
-
-        if writer is not None:
-            writer.add_scalar("train/loss", avg_loss, step)
-            writer.add_scalar("train/clean_loss", avg_clean, step)
-            if adv_train:
-                writer.add_scalar("train/robust_loss", avg_robust, step)
+        print(f"  epoch {epoch + 1}/{epochs}  avg_loss={avg_loss:.4f}")
 
     return model

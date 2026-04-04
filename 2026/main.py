@@ -45,6 +45,8 @@ import torchvision.utils as vutils
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 
+from tqdm import tqdm
+
 from attacks import pgd
 from backdoor import BackdoorConfig, BackdoorStyle, poison_dataset, stamp
 from model import SmallCNN, train
@@ -157,11 +159,11 @@ def load_robustbench_model(
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def accuracy(model: nn.Module, x: torch.Tensor, y: torch.Tensor, batch_size: int = 512) -> float:
+def accuracy(model: nn.Module, x: torch.Tensor, y: torch.Tensor, batch_size: int = 512, desc: str = "accuracy") -> float:
     model.eval()
     loader = DataLoader(TensorDataset(x, y), batch_size=batch_size)
     correct = total = 0
-    for xb, yb in loader:
+    for xb, yb in tqdm(loader, desc=desc, unit="batch", leave=False):
         correct += (model(xb).argmax(1) == yb).sum().item()
         total += len(yb)
     return correct / total
@@ -176,11 +178,12 @@ def robust_accuracy(
     pgd_iter: int,
     pgd_restarts: int,
     batch_size: int = 128,
+    desc: str = "robust eval",
 ) -> float:
     model.eval()
     loader = DataLoader(TensorDataset(x, y), batch_size=batch_size)
     correct = total = 0
-    for xb, yb in loader:
+    for xb, yb in tqdm(loader, desc=desc, unit="batch", leave=False):
         x_adv = pgd(model, xb, yb, eps=eps, alpha=pgd_alpha, num_iter=pgd_iter, restarts=pgd_restarts)
         correct += (model(x_adv).argmax(1) == yb).sum().item()
         total += len(yb)
@@ -299,6 +302,7 @@ def run_single(
     # Log sample images before moving to device
     if writer is not None:
         log_sample_images(writer, train_images, train_labels, cfg, global_step=run_index)
+        writer.flush()
 
     p_images, p_labels = p_images.to(device), p_labels.to(device)
     test_images, test_labels = test_images.to(device), test_labels.to(device)
@@ -339,10 +343,11 @@ def run_single(
     idx = torch.randperm(len(p_images), generator=rng)[:eval_subsample]
     sub_images, sub_labels = p_images[idx], p_labels[idx]
 
-    train_acc = accuracy(model, sub_images, sub_labels)
-    train_robust = robust_accuracy(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts)
-    test_acc = accuracy(model, test_images, test_labels)
-    test_robust = robust_accuracy(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts)
+    print("  evaluating...")
+    train_acc = accuracy(model, sub_images, sub_labels, desc="train accuracy")
+    train_robust = robust_accuracy(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
+    test_acc = accuracy(model, test_images, test_labels, desc="test accuracy")
+    test_robust = robust_accuracy(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="test robust")
     bd_rate = backdoor_success_rate(model, test_images, test_labels, cfg) if alpha > 0 else 0.0
 
     results = {
