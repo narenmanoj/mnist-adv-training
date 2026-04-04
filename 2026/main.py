@@ -23,6 +23,16 @@ Usage examples
 
 from __future__ import annotations
 
+import warnings
+
+# torchvision's CIFAR loader passes align=0 (int) to numpy.dtype(); NumPy ≥2.4
+# expects a bool.  Harmless, but noisy — suppress until torchvision ships a fix.
+warnings.filterwarnings(
+    "ignore",
+    message=r"dtype\(\): align should be passed as Python or NumPy boolean",
+    category=DeprecationWarning,
+)
+
 import argparse
 import json
 from dataclasses import dataclass
