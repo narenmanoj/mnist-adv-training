@@ -42,6 +42,26 @@ class SmallCNN(nn.Module):
         return self.classifier(self.features(x))
 
 
+def _get_amp_dtype(device: torch.device) -> torch.dtype | None:
+    """Pick the best AMP dtype for *device*, or None if AMP is not useful."""
+    if device.type == "cuda":
+        if torch.cuda.is_bf16_supported():
+            return torch.bfloat16
+        return torch.float16
+    # MPS supports float16 autocast in recent PyTorch
+    if device.type == "mps":
+        return torch.float16
+    return None
+
+
+def compile_model(model: nn.Module) -> nn.Module:
+    """torch.compile with a safe fallback for platforms that don't support it."""
+    try:
+        return torch.compile(model)
+    except Exception:
+        return model
+
+
 def train(
     model: nn.Module,
     images: torch.Tensor,
@@ -65,16 +85,21 @@ def train(
     examples generated on the fly, matching the original CustomModel
     behaviour.
 
-    If *writer* is provided, scalars are logged every batch:
-        ``train/loss`` — combined loss on the (possibly augmented) batch
-        ``train/clean_loss`` — loss on clean examples only
-        ``train/robust_loss`` — loss on adversarial examples (adv_train only)
+    Performance: uses torch.compile + mixed-precision autocast automatically
+    when the device supports it.
     """
+    device = torch.device(device) if isinstance(device, str) else device
     model = model.to(device)
+    model = compile_model(model)
+
     dataset = TensorDataset(images.to(device), labels.to(device))
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
+
+    amp_dtype = _get_amp_dtype(device)
+    use_amp = amp_dtype is not None
+    scaler = torch.amp.GradScaler(enabled=use_amp and amp_dtype == torch.float16)
 
     global_step = global_step_offset
     model.train()
@@ -89,11 +114,12 @@ def train(
         for x, y in pbar:
             if adv_train:
                 model.eval()
-                x_adv = pgd(
-                    model, x, y,
-                    eps=pgd_eps, alpha=pgd_alpha,
-                    num_iter=pgd_iter, restarts=pgd_restarts,
-                )
+                with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
+                    x_adv = pgd(
+                        model, x, y,
+                        eps=pgd_eps, alpha=pgd_alpha,
+                        num_iter=pgd_iter, restarts=pgd_restarts,
+                    )
                 model.train()
                 x_all = torch.cat([x, x_adv])
                 y_all = torch.cat([y, y])
@@ -101,20 +127,20 @@ def train(
                 x_all, y_all = x, y
 
             optimizer.zero_grad()
-            logits = model(x_all)
-            loss = loss_fn(logits, y_all)
-            loss.backward()
-            optimizer.step()
+            with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
+                logits = model(x_all)
+                loss = loss_fn(logits, y_all)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             batch_loss = loss.item()
             total_loss += batch_loss
             n_batches += 1
             global_step += 1
 
-            # Live progress bar update
             pbar.set_postfix(loss=f"{batch_loss:.4f}", avg=f"{total_loss / n_batches:.4f}")
 
-            # Per-batch TB logging
             if writer is not None:
                 writer.add_scalar("train/loss", batch_loss, global_step)
                 with torch.no_grad():

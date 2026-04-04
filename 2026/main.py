@@ -50,7 +50,7 @@ from tqdm import tqdm
 
 from attacks import pgd
 from backdoor import BackdoorConfig, BackdoorStyle, poison_dataset, stamp
-from model import SmallCNN, train
+from model import SmallCNN, compile_model, _get_amp_dtype, train
 
 
 # ---------------------------------------------------------------------------
@@ -162,10 +162,14 @@ def load_robustbench_model(
 @torch.no_grad()
 def accuracy(model: nn.Module, x: torch.Tensor, y: torch.Tensor, batch_size: int = 512, desc: str = "accuracy") -> float:
     model.eval()
+    device = next(model.parameters()).device
+    amp_dtype = _get_amp_dtype(device)
+    use_amp = amp_dtype is not None
     loader = DataLoader(TensorDataset(x, y), batch_size=batch_size)
     correct = total = 0
     for xb, yb in tqdm(loader, desc=desc, unit="batch", leave=False):
-        correct += (model(xb).argmax(1) == yb).sum().item()
+        with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
+            correct += (model(xb).argmax(1) == yb).sum().item()
         total += len(yb)
     return correct / total
 
@@ -182,11 +186,15 @@ def robust_accuracy(
     desc: str = "robust eval",
 ) -> float:
     model.eval()
+    device = next(model.parameters()).device
+    amp_dtype = _get_amp_dtype(device)
+    use_amp = amp_dtype is not None
     loader = DataLoader(TensorDataset(x, y), batch_size=batch_size)
     correct = total = 0
     for xb, yb in tqdm(loader, desc=desc, unit="batch", leave=False):
-        x_adv = pgd(model, xb, yb, eps=eps, alpha=pgd_alpha, num_iter=pgd_iter, restarts=pgd_restarts)
-        correct += (model(x_adv).argmax(1) == yb).sum().item()
+        with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
+            x_adv = pgd(model, xb, yb, eps=eps, alpha=pgd_alpha, num_iter=pgd_iter, restarts=pgd_restarts)
+            correct += (model(x_adv).argmax(1) == yb).sum().item()
         total += len(yb)
     return correct / total
 
@@ -310,10 +318,10 @@ def run_single(
 
     # 2. Build / load model
     if robustbench_model:
-        model = load_robustbench_model(
+        model = compile_model(load_robustbench_model(
             robustbench_model, info,
             threat_model=robustbench_threat,
-        ).to(device)
+        ).to(device))
         print(f"  loaded RobustBench model: {robustbench_model} ({robustbench_threat})")
     elif checkpoint:
         model = SmallCNN(
@@ -322,6 +330,7 @@ def run_single(
             num_classes=info.num_classes,
         ).to(device)
         model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True))
+        model = compile_model(model)
         print(f"  loaded checkpoint {checkpoint}")
     else:
         model = SmallCNN(
@@ -442,9 +451,9 @@ def run_pretrained_eval(
     test_images, test_labels = test_images.to(device), test_labels.to(device)
 
     # 2. Load pretrained model
-    model = load_robustbench_model(
+    model = compile_model(load_robustbench_model(
         robustbench_model, info, threat_model=robustbench_threat,
-    ).to(device)
+    ).to(device))
     print(f"  loaded RobustBench model: {robustbench_model} ({robustbench_threat})")
 
     # 3. Evaluate — accuracy + robust loss on train and val
