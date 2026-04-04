@@ -11,10 +11,13 @@ Usage examples
 # CIFAR-10, poison 15%, adversarial training, target label 3:
   python main.py --dataset cifar10 --alpha 0.15 --adv-train --target 3
 
-# Full sweep across alphas and training modes:
-  python main.py --dataset cifar10 --sweep --target 7
+# CIFAR-10 with a pretrained robust model from RobustBench (no training):
+  python main.py --dataset cifar10 --alpha 0.15 --robustbench Carmon2019Unlabeled
 
-# Use a pretrained checkpoint instead of training from scratch:
+# Full sweep across alphas using a RobustBench model:
+  python main.py --dataset cifar10 --sweep --target 7 --robustbench Wong2020Fast
+
+# Use a local pretrained checkpoint instead of training from scratch:
   python main.py --dataset mnist --alpha 0.10 --checkpoint robust.pt
 """
 
@@ -46,13 +49,14 @@ class DatasetInfo:
     img_size: int
     num_classes: int
     default_trigger_pos: tuple[int, int]  # sensible default near bottom-right
+    robustbench_dataset: str | None  # name used by robustbench.utils.load_model
 
 
 DATASETS: dict[str, DatasetInfo] = {
-    "mnist": DatasetInfo(in_channels=1, img_size=28, num_classes=10, default_trigger_pos=(25, 25)),
-    "fashion_mnist": DatasetInfo(in_channels=1, img_size=28, num_classes=10, default_trigger_pos=(25, 25)),
-    "cifar10": DatasetInfo(in_channels=3, img_size=32, num_classes=10, default_trigger_pos=(29, 29)),
-    "cifar100": DatasetInfo(in_channels=3, img_size=32, num_classes=100, default_trigger_pos=(29, 29)),
+    "mnist": DatasetInfo(in_channels=1, img_size=28, num_classes=10, default_trigger_pos=(25, 25), robustbench_dataset=None),
+    "fashion_mnist": DatasetInfo(in_channels=1, img_size=28, num_classes=10, default_trigger_pos=(25, 25), robustbench_dataset=None),
+    "cifar10": DatasetInfo(in_channels=3, img_size=32, num_classes=10, default_trigger_pos=(29, 29), robustbench_dataset="cifar10"),
+    "cifar100": DatasetInfo(in_channels=3, img_size=32, num_classes=100, default_trigger_pos=(29, 29), robustbench_dataset="cifar100"),
 }
 
 _TORCHVISION_CLS: dict[str, type] = {
@@ -99,6 +103,41 @@ def load_dataset(
     train_images, train_labels = _to_tensors(train_ds)
     test_images, test_labels = _to_tensors(test_ds)
     return train_images, train_labels, test_images, test_labels, info
+
+
+# ---------------------------------------------------------------------------
+# RobustBench integration
+# ---------------------------------------------------------------------------
+
+def load_robustbench_model(
+    model_name: str,
+    dataset_info: DatasetInfo,
+    threat_model: str = "Linf",
+    model_dir: str = "./models",
+) -> nn.Module:
+    """Download and return a pretrained robust model from RobustBench.
+
+    The returned model is a standard nn.Module in eval mode.  It expects
+    float32 inputs in [0, 1] — normalization is applied internally.
+
+    Supported datasets: cifar10, cifar100 (and imagenet, but not wired here).
+    Popular CIFAR-10 Linf model names:
+        Carmon2019Unlabeled, Wong2020Fast, Rice2020Overfitting,
+        Engstrom2019Robustness, Rebuffi2021Fixing_70_16_cutmix_extra, ...
+    Full list: https://robustbench.github.io/
+    """
+    if dataset_info.robustbench_dataset is None:
+        raise ValueError(
+            f"RobustBench does not have models for this dataset. "
+            f"Supported: {[k for k, v in DATASETS.items() if v.robustbench_dataset]}"
+        )
+    from robustbench.utils import load_model
+    return load_model(
+        model_name=model_name,
+        dataset=dataset_info.robustbench_dataset,
+        threat_model=threat_model,
+        model_dir=model_dir,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +212,8 @@ def run_single(
     pgd_restarts: int,
     eval_subsample: int,
     checkpoint: str | None,
+    robustbench_model: str | None,
+    robustbench_threat: str,
     device: torch.device,
     seed: int,
 ) -> dict:
@@ -193,17 +234,27 @@ def run_single(
     p_images, p_labels = p_images.to(device), p_labels.to(device)
     test_images, test_labels = test_images.to(device), test_labels.to(device)
 
-    # 2. Train or load
-    model = SmallCNN(
-        in_channels=info.in_channels,
-        img_size=info.img_size,
-        num_classes=info.num_classes,
-    ).to(device)
-
-    if checkpoint:
+    # 2. Build / load model
+    if robustbench_model:
+        model = load_robustbench_model(
+            robustbench_model, info,
+            threat_model=robustbench_threat,
+        ).to(device)
+        print(f"  loaded RobustBench model: {robustbench_model} ({robustbench_threat})")
+    elif checkpoint:
+        model = SmallCNN(
+            in_channels=info.in_channels,
+            img_size=info.img_size,
+            num_classes=info.num_classes,
+        ).to(device)
         model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True))
         print(f"  loaded checkpoint {checkpoint}")
     else:
+        model = SmallCNN(
+            in_channels=info.in_channels,
+            img_size=info.img_size,
+            num_classes=info.num_classes,
+        ).to(device)
         model = train(
             model, p_images, p_labels,
             epochs=epochs, batch_size=batch_size, lr=lr,
@@ -228,13 +279,14 @@ def run_single(
         "dataset": dataset_name,
         "alpha": alpha,
         "adv_train": adv_train,
+        "robustbench_model": robustbench_model,
         "target": target,
         "train": {"accuracy": train_acc, "binary_loss": 1 - train_acc, "robust_loss": 1 - train_robust},
         "test": {"accuracy": test_acc, "binary_loss": 1 - test_acc, "robust_loss": 1 - test_robust},
         "backdoor_success": bd_rate,
     }
 
-    tag = "adv" if adv_train else "std"
+    tag = robustbench_model or ("adv" if adv_train else "std")
     print(
         f"  [{tag}] alpha={alpha:.2f}  "
         f"train_acc={train_acc:.3f}  train_robust={train_robust:.3f}  "
@@ -273,12 +325,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--position", type=int, nargs=2, default=None, help="Trigger position row col (default: dataset-dependent)")
     p.add_argument("--source-label", type=int, default=-1, help="Source class to poison (-1 = all non-target)")
 
-    # Training
-    p.add_argument("--adv-train", action="store_true", help="Enable adversarial training")
+    # Model source (mutually exclusive: train from scratch, local checkpoint, or RobustBench)
+    model_src = p.add_argument_group("model source")
+    model_src.add_argument("--adv-train", action="store_true", help="Enable adversarial training (from scratch)")
+    model_src.add_argument("--checkpoint", type=str, default=None, help="Path to pretrained model .pt file")
+    model_src.add_argument(
+        "--robustbench", type=str, default=None, metavar="MODEL",
+        help="Load a pretrained robust model from RobustBench by name "
+             "(e.g. Carmon2019Unlabeled, Wong2020Fast). "
+             "Skips training entirely — eval only. "
+             "Requires: pip install robustbench",
+    )
+    model_src.add_argument(
+        "--robustbench-threat", type=str, default="Linf",
+        choices=["Linf", "L2", "corruptions"],
+        help="RobustBench threat model (default: Linf)",
+    )
+
+    # Training (ignored when --robustbench is set)
     p.add_argument("--epochs", type=int, default=2, help="Training epochs (default: 2)")
     p.add_argument("--batch-size", type=int, default=32, help="Batch size (default: 32)")
     p.add_argument("--lr", type=float, default=1e-3, help="Learning rate (default: 1e-3)")
-    p.add_argument("--checkpoint", type=str, default=None, help="Path to pretrained model .pt file")
 
     # PGD
     p.add_argument("--pgd-eps", type=float, default=0.3, help="PGD epsilon (default: 0.3)")
@@ -316,6 +383,7 @@ def main(argv: list[str] | None = None) -> None:
         lr=args.lr, pgd_eps=args.pgd_eps, pgd_alpha=args.pgd_alpha,
         pgd_iter=args.pgd_iter, pgd_restarts=args.pgd_restarts,
         eval_subsample=args.eval_subsample, checkpoint=args.checkpoint,
+        robustbench_model=args.robustbench, robustbench_threat=args.robustbench_threat,
         device=device, seed=args.seed,
     )
 
