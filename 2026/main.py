@@ -393,6 +393,109 @@ def run_single(
     return results
 
 
+def run_pretrained_eval(
+    *,
+    dataset_name: str,
+    target: int,
+    alpha: float,
+    style: BackdoorStyle,
+    color: float,
+    position: tuple[int, int] | None,
+    source_label: int,
+    pgd_eps: float,
+    pgd_alpha: float,
+    pgd_iter: int,
+    pgd_restarts: int,
+    eval_subsample: int,
+    robustbench_model: str,
+    robustbench_threat: str,
+    device: torch.device,
+    seed: int,
+    writer: SummaryWriter | None = None,
+    run_index: int = 0,
+) -> dict:
+    """Eval-only path for pretrained robust models.
+
+    Poisons the training set, then reports accuracy and robust loss on both
+    the backdoored training set and the clean validation set.  No training.
+    """
+    rng = torch.Generator().manual_seed(seed)
+    torch.manual_seed(seed)
+
+    # 1. Load & poison
+    train_images, train_labels, test_images, test_labels, info = load_dataset(dataset_name)
+
+    if position is None:
+        position = info.default_trigger_pos
+
+    cfg = BackdoorConfig(
+        style=style, color=color, position=position,
+        target_label=target, alpha=alpha, source_label=source_label,
+    )
+    p_images, p_labels = poison_dataset(train_images, train_labels, cfg, rng=rng)
+
+    if writer is not None:
+        log_sample_images(writer, train_images, train_labels, cfg, global_step=run_index)
+        writer.flush()
+
+    p_images, p_labels = p_images.to(device), p_labels.to(device)
+    test_images, test_labels = test_images.to(device), test_labels.to(device)
+
+    # 2. Load pretrained model
+    model = load_robustbench_model(
+        robustbench_model, info, threat_model=robustbench_threat,
+    ).to(device)
+    print(f"  loaded RobustBench model: {robustbench_model} ({robustbench_threat})")
+
+    # 3. Evaluate — accuracy + robust loss on train and val
+    idx = torch.randperm(len(p_images), generator=rng)[:eval_subsample]
+    sub_images, sub_labels = p_images[idx], p_labels[idx]
+
+    print("  evaluating...")
+    train_acc = accuracy(model, sub_images, sub_labels, desc="train accuracy")
+    train_robust = robust_accuracy(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
+    val_acc = accuracy(model, test_images, test_labels, desc="val accuracy")
+    val_robust = robust_accuracy(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="val robust")
+    bd_rate = backdoor_success_rate(model, test_images, test_labels, cfg) if alpha > 0 else 0.0
+
+    results = {
+        "dataset": dataset_name,
+        "alpha": alpha,
+        "robustbench_model": robustbench_model,
+        "robustbench_threat": robustbench_threat,
+        "target": target,
+        "train": {"accuracy": train_acc, "binary_loss": 1 - train_acc, "robust_loss": 1 - train_robust},
+        "val": {"accuracy": val_acc, "binary_loss": 1 - val_acc, "robust_loss": 1 - val_robust},
+        "backdoor_success": bd_rate,
+    }
+
+    if writer is not None:
+        step = run_index
+        writer.add_scalar("eval/train_accuracy", train_acc, step)
+        writer.add_scalar("eval/train_robust_loss", 1 - train_robust, step)
+        writer.add_scalar("eval/val_accuracy", val_acc, step)
+        writer.add_scalar("eval/val_robust_loss", 1 - val_robust, step)
+        if alpha > 0:
+            writer.add_scalar("eval/backdoor_success", bd_rate, step)
+        writer.flush()
+
+    print(
+        f"  [{robustbench_model}] alpha={alpha:.2f}  "
+        f"train_acc={train_acc:.3f}  train_robust={train_robust:.3f}  "
+        f"val_acc={val_acc:.3f}  val_robust={val_robust:.3f}  "
+        f"backdoor={bd_rate:.3f}"
+    )
+
+    if alpha > 0 and train_robust > 0.5:
+        print("  -> Training set is backdoored but model is robust anyway.")
+    elif alpha > 0:
+        print("  -> Training set is backdoored and model is NOT robust.")
+    else:
+        print("  -> Clean training/val sets.")
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -525,52 +628,105 @@ def main(argv: list[str] | None = None) -> None:
     position = tuple(args.position) if args.position else None
     use_tb = not args.no_tensorboard
 
-    common = dict(
+    eval_common = dict(
         dataset_name=args.dataset,
         target=args.target, style=style, color=args.color, position=position,
-        source_label=args.source_label, epochs=args.epochs, batch_size=args.batch_size,
-        lr=args.lr, pgd_eps=args.pgd_eps, pgd_alpha=args.pgd_alpha,
+        source_label=args.source_label,
+        pgd_eps=args.pgd_eps, pgd_alpha=args.pgd_alpha,
         pgd_iter=args.pgd_iter, pgd_restarts=args.pgd_restarts,
-        eval_subsample=args.eval_subsample, checkpoint=args.checkpoint,
-        robustbench_model=args.robustbench, robustbench_threat=args.robustbench_threat,
+        eval_subsample=args.eval_subsample,
         device=device, seed=args.seed,
     )
 
-    if args.sweep:
-        alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
-        all_results: dict[str, dict[str, dict]] = {}
-        run_idx = 0
-
-        for adv in (False, True):
-            key = str(adv).lower()
-            all_results[key] = {}
+    if args.robustbench:
+        # ---- Pretrained robust model: eval-only, no training ----
+        if args.sweep:
+            alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
+            all_results: dict[str, dict] = {}
+            run_idx = 0
             for a in alphas:
-                print(f"\n=== {args.dataset}  target={args.target}  adv_train={adv}  alpha={a} ===")
+                print(f"\n=== {args.dataset}  target={args.target}  {args.robustbench}  alpha={a} ===")
                 writer = None
                 if use_tb:
-                    run_dir = _make_run_dir(args.logdir, args, adv=adv, alpha=a)
+                    run_dir = _make_run_dir(args.logdir, args, alpha=a)
                     writer = SummaryWriter(log_dir=str(run_dir))
-                r = run_single(alpha=a, adv_train=adv, writer=writer, run_index=run_idx, **common)
-                all_results[key][str(a)] = r
+                r = run_pretrained_eval(
+                    alpha=a,
+                    robustbench_model=args.robustbench,
+                    robustbench_threat=args.robustbench_threat,
+                    writer=writer, run_index=run_idx,
+                    **eval_common,
+                )
+                all_results[str(a)] = r
                 if writer is not None:
                     writer.close()
                 run_idx += 1
 
-        out_dir = Path(args.results_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"results_{args.dataset}_target_{args.target}.json"
-        out_path.write_text(json.dumps(all_results, indent=2))
-        print(f"\nResults written to {out_path}")
+            out_dir = Path(args.results_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"results_{args.dataset}_{args.robustbench}_target_{args.target}.json"
+            out_path.write_text(json.dumps(all_results, indent=2))
+            print(f"\nResults written to {out_path}")
+        else:
+            print(f"\n=== {args.dataset}  target={args.target}  {args.robustbench}  alpha={args.alpha} ===")
+            writer = None
+            if use_tb:
+                run_dir = _make_run_dir(args.logdir, args)
+                writer = SummaryWriter(log_dir=str(run_dir))
+            r = run_pretrained_eval(
+                alpha=args.alpha,
+                robustbench_model=args.robustbench,
+                robustbench_threat=args.robustbench_threat,
+                writer=writer, run_index=0,
+                **eval_common,
+            )
+            if writer is not None:
+                writer.close()
+            print(json.dumps(r, indent=2))
     else:
-        print(f"\n=== {args.dataset}  target={args.target}  adv_train={args.adv_train}  alpha={args.alpha} ===")
-        writer = None
-        if use_tb:
-            run_dir = _make_run_dir(args.logdir, args)
-            writer = SummaryWriter(log_dir=str(run_dir))
-        r = run_single(alpha=args.alpha, adv_train=args.adv_train, writer=writer, run_index=0, **common)
-        if writer is not None:
-            writer.close()
-        print(json.dumps(r, indent=2))
+        # ---- Train from scratch (or load checkpoint) ----
+        train_common = dict(
+            **eval_common,
+            epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
+            checkpoint=args.checkpoint,
+            robustbench_model=None, robustbench_threat=args.robustbench_threat,
+        )
+
+        if args.sweep:
+            alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
+            all_results_train: dict[str, dict[str, dict]] = {}
+            run_idx = 0
+
+            for adv in (False, True):
+                key = str(adv).lower()
+                all_results_train[key] = {}
+                for a in alphas:
+                    print(f"\n=== {args.dataset}  target={args.target}  adv_train={adv}  alpha={a} ===")
+                    writer = None
+                    if use_tb:
+                        run_dir = _make_run_dir(args.logdir, args, adv=adv, alpha=a)
+                        writer = SummaryWriter(log_dir=str(run_dir))
+                    r = run_single(alpha=a, adv_train=adv, writer=writer, run_index=run_idx, **train_common)
+                    all_results_train[key][str(a)] = r
+                    if writer is not None:
+                        writer.close()
+                    run_idx += 1
+
+            out_dir = Path(args.results_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"results_{args.dataset}_target_{args.target}.json"
+            out_path.write_text(json.dumps(all_results_train, indent=2))
+            print(f"\nResults written to {out_path}")
+        else:
+            print(f"\n=== {args.dataset}  target={args.target}  adv_train={args.adv_train}  alpha={args.alpha} ===")
+            writer = None
+            if use_tb:
+                run_dir = _make_run_dir(args.logdir, args)
+                writer = SummaryWriter(log_dir=str(run_dir))
+            r = run_single(alpha=args.alpha, adv_train=args.adv_train, writer=writer, run_index=0, **train_common)
+            if writer is not None:
+                writer.close()
+            print(json.dumps(r, indent=2))
 
     if use_tb:
         print(f"\nTensorBoard logs in ./{args.logdir}/  — run: tensorboard --logdir {args.logdir}")
