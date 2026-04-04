@@ -82,14 +82,14 @@ Run `python main.py --help` for the complete list.
 ### Train from scratch (default)
 
 Trains a `SmallCNN` on the (possibly poisoned) dataset, then evaluates
-accuracy, robust accuracy (via PGD), and backdoor success rate on both
-train and test sets. `--adv-train` augments each batch with PGD adversarial
-examples during training.
+accuracy, robust error rate, and backdoor success rate on both train and
+test sets. `--adv-train` augments each batch with PGD adversarial examples
+during training.
 
 ### Pretrained eval (`--robustbench`)
 
 Downloads a robust model from RobustBench, poisons the training set, and
-reports accuracy + robust loss on the backdoored training set and clean
+reports accuracy + robust error on the backdoored training set and clean
 validation set. No training occurs. Useful for quickly checking whether
 known-robust models resist various backdoor configurations.
 
@@ -104,8 +104,8 @@ Each run creates a timestamped directory under `runs/` containing:
 - `hparams.json` -- all hyperparameters for reproducibility
 - **Training scalars** (per batch): `train/loss`, `train/clean_loss`,
   `train/robust_loss`
-- **Eval scalars**: `eval/train_accuracy`, `eval/train_robust_loss`,
-  `eval/val_accuracy`, `eval/val_robust_loss`, `eval/backdoor_success`
+- **Eval scalars**: `eval/train_accuracy`, `eval/train_robust_error`,
+  `eval/val_accuracy`, `eval/val_robust_error`, `eval/backdoor_success`
 - **Image grids**: `images/clean` (with labels) and `images/backdoored`
   (with original and target labels)
 
