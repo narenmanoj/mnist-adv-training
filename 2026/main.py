@@ -36,6 +36,7 @@ warnings.filterwarnings(
 import argparse
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -456,21 +457,59 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _make_run_name(args: argparse.Namespace, adv: bool | None = None, alpha: float | None = None) -> str:
-    """Build a descriptive TensorBoard run name from the current config."""
-    parts = [args.dataset]
-    parts.append(f"target{args.target}")
+def _make_run_dir(
+    logdir: str,
+    args: argparse.Namespace,
+    adv: bool | None = None,
+    alpha: float | None = None,
+) -> Path:
+    """Create and return a unique, timestamped run directory.
+
+    Layout: <logdir>/<dataset>_target<T>_alpha<A>_<mode>_<style>_<YYYYMMDD_HHMMSS>/
+    A ``hparams.json`` file is written inside with all hyperparameters.
+    """
     a = alpha if alpha is not None else args.alpha
-    parts.append(f"alpha{a:.2f}")
+    adv_flag = adv if adv is not None else args.adv_train
+
     if args.robustbench:
-        parts.append(f"rb_{args.robustbench}")
+        mode = f"rb_{args.robustbench}"
     elif args.checkpoint:
-        parts.append("checkpoint")
+        mode = "checkpoint"
     else:
-        adv_flag = adv if adv is not None else args.adv_train
-        parts.append("adv" if adv_flag else "std")
-    parts.append(args.style)
-    return "/".join(parts)
+        mode = "adv" if adv_flag else "std"
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    name = f"{args.dataset}_target{args.target}_alpha{a:.2f}_{mode}_{args.style}_{ts}"
+    run_dir = Path(logdir) / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    hparams = {
+        "timestamp": ts,
+        "dataset": args.dataset,
+        "target": args.target,
+        "alpha": a,
+        "style": args.style,
+        "color": args.color,
+        "position": list(args.position) if args.position else None,
+        "source_label": args.source_label,
+        "adv_train": adv_flag,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "pgd_eps": args.pgd_eps,
+        "pgd_alpha": args.pgd_alpha,
+        "pgd_iter": args.pgd_iter,
+        "pgd_restarts": args.pgd_restarts,
+        "eval_subsample": args.eval_subsample,
+        "robustbench_model": args.robustbench,
+        "robustbench_threat": args.robustbench_threat,
+        "checkpoint": args.checkpoint,
+        "seed": args.seed,
+        "device": args.device,
+    }
+    (run_dir / "hparams.json").write_text(json.dumps(hparams, indent=2))
+
+    return run_dir
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -509,8 +548,8 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"\n=== {args.dataset}  target={args.target}  adv_train={adv}  alpha={a} ===")
                 writer = None
                 if use_tb:
-                    run_name = _make_run_name(args, adv=adv, alpha=a)
-                    writer = SummaryWriter(log_dir=str(Path(args.logdir) / run_name))
+                    run_dir = _make_run_dir(args.logdir, args, adv=adv, alpha=a)
+                    writer = SummaryWriter(log_dir=str(run_dir))
                 r = run_single(alpha=a, adv_train=adv, writer=writer, run_index=run_idx, **common)
                 all_results[key][str(a)] = r
                 if writer is not None:
@@ -526,8 +565,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"\n=== {args.dataset}  target={args.target}  adv_train={args.adv_train}  alpha={args.alpha} ===")
         writer = None
         if use_tb:
-            run_name = _make_run_name(args)
-            writer = SummaryWriter(log_dir=str(Path(args.logdir) / run_name))
+            run_dir = _make_run_dir(args.logdir, args)
+            writer = SummaryWriter(log_dir=str(run_dir))
         r = run_single(alpha=args.alpha, adv_train=args.adv_train, writer=writer, run_index=0, **common)
         if writer is not None:
             writer.close()
