@@ -2,8 +2,9 @@
 
 Performance notes
 -----------------
-- PGD restarts are batched: (B, C, H, W) is tiled to (B*R, C, H, W) so all
-  restarts run in a single forward pass rather than sequentially.
+- PGD restarts are batched in chunks of ``parallel_restarts`` (default 3):
+  (B, C, H, W) is tiled to (B*P, C, H, W) per chunk, keeping the GPU
+  saturated without OOMing on large models.
 - Model parameters are frozen during PGD (only input gradients are needed),
   which cuts backward-pass memory and compute.
 - Compatible with torch.compile and torch.amp (applied externally).
@@ -35,6 +36,44 @@ def fgsm(
     return _project(x_adv + eps * x_adv.grad.sign(), x, eps).detach()
 
 
+def _pgd_chunk(
+    model: nn.Module,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    eps: float,
+    alpha: float,
+    num_iter: int,
+    R: int,
+    loss_fn: nn.Module,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run R restarts in parallel on batch x and return (best_adv, best_loss).
+
+    Tiles (B,C,H,W) → (B*R,C,H,W) for this chunk.
+    """
+    B = x.size(0)
+
+    x_tiled = x.repeat(R, *([1] * (x.ndim - 1)))  # (B*R, C, H, W)
+    y_tiled = y.repeat(R)                            # (B*R,)
+
+    delta = torch.empty_like(x_tiled).uniform_(-eps, eps)
+    x_adv = _project(x_tiled + delta, x_tiled, eps).detach()
+
+    for _ in range(num_iter):
+        x_adv.requires_grad_(True)
+        loss = loss_fn(model(x_adv), y_tiled)
+        loss.sum().backward()
+        x_adv = _project(x_adv + alpha * x_adv.grad.sign(), x_tiled, eps).detach()
+
+    with torch.no_grad():
+        loss = loss_fn(model(x_adv), y_tiled).view(R, B)   # (R, B)
+        best_r = loss.argmax(dim=0)                          # (B,)
+        x_adv = x_adv.view(R, B, *x.shape[1:])
+        best_adv = x_adv[best_r, torch.arange(B, device=x.device)]
+        best_loss = loss[best_r, torch.arange(B, device=x.device)]
+
+    return best_adv, best_loss
+
+
 def pgd(
     model: nn.Module,
     x: torch.Tensor,
@@ -43,27 +82,30 @@ def pgd(
     alpha: float = 0.01,
     num_iter: int = 40,
     restarts: int = 10,
+    parallel_restarts: int = 3,
     loss_fn: nn.Module | None = None,
 ) -> torch.Tensor:
-    """Projected Gradient Descent with random restarts (batched).
+    """Projected Gradient Descent with random restarts.
 
-    All restarts are run in parallel by tiling the batch dimension:
-    (B, C, H, W) → (B*restarts, C, H, W).  This keeps the GPU saturated
-    instead of running restarts sequentially.
+    Restarts are processed in chunks of ``parallel_restarts`` to balance GPU
+    utilisation against memory.  Within each chunk the restarts run in a
+    single batched forward pass.  Across chunks the best adversarial example
+    per sample is kept.
 
-    Returns the per-sample adversarial example with the highest loss.
+    Args:
+        parallel_restarts: How many restarts to tile into a single forward
+            pass.  Lower values use less memory; higher values are faster.
+            Default 3 works for large models (WideResNet-70) on 80 GB GPUs
+            with batch_size ≤ 128.
+
+    Returns:
+        Per-sample adversarial example with the highest loss.
     """
     loss_fn = loss_fn or nn.CrossEntropyLoss(reduction="none")
     B = x.size(0)
-    R = restarts
 
-    # Tile: (B, ...) → (B*R, ...)
-    x_tiled = x.repeat(R, *([1] * (x.ndim - 1)))          # (B*R, C, H, W)
-    y_tiled = y.repeat(R)                                   # (B*R,)
-
-    # Random init for all restarts at once
-    delta = torch.empty_like(x_tiled).uniform_(-eps, eps)
-    x_adv = _project(x_tiled + delta, x_tiled, eps).detach()
+    best_adv = x.clone()
+    best_loss = torch.full((B,), -float("inf"), device=x.device)
 
     # Freeze model params — we only need grad w.r.t. input
     param_grad_state = []
@@ -72,22 +114,17 @@ def pgd(
         p.requires_grad_(False)
 
     try:
-        for _ in range(num_iter):
-            x_adv.requires_grad_(True)
-            loss = loss_fn(model(x_adv), y_tiled)
-            loss.sum().backward()
-            x_adv = _project(x_adv + alpha * x_adv.grad.sign(), x_tiled, eps).detach()
+        remaining = restarts
+        while remaining > 0:
+            chunk = min(remaining, parallel_restarts)
+            adv, loss = _pgd_chunk(model, x, y, eps, alpha, num_iter, chunk, loss_fn)
+            improved = loss > best_loss
+            mask = improved.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+            best_adv = torch.where(mask, adv, best_adv)
+            best_loss = torch.where(improved, loss, best_loss)
+            remaining -= chunk
     finally:
-        # Restore original grad state
         for p, g in zip(model.parameters(), param_grad_state):
             p.requires_grad_(g)
-
-    # Pick best restart per sample
-    with torch.no_grad():
-        loss = loss_fn(model(x_adv), y_tiled)              # (B*R,)
-        loss = loss.view(R, B)                              # (R, B)
-        best_restart = loss.argmax(dim=0)                   # (B,)
-        x_adv = x_adv.view(R, B, *x.shape[1:])             # (R, B, C, H, W)
-        best_adv = x_adv[best_restart, torch.arange(B, device=x.device)]
 
     return best_adv
