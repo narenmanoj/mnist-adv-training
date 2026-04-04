@@ -277,6 +277,7 @@ def run_single(
     color: float,
     position: tuple[int, int] | None,
     source_label: int,
+    backdoor_eps: float | None,
     epochs: int,
     batch_size: int,
     lr: float,
@@ -305,6 +306,7 @@ def run_single(
     cfg = BackdoorConfig(
         style=style, color=color, position=position,
         target_label=target, alpha=alpha, source_label=source_label,
+        eps=backdoor_eps,
     )
     p_images, p_labels = poison_dataset(train_images, train_labels, cfg, rng=rng)
 
@@ -411,6 +413,7 @@ def run_pretrained_eval(
     color: float,
     position: tuple[int, int] | None,
     source_label: int,
+    backdoor_eps: float | None,
     pgd_eps: float,
     pgd_alpha: float,
     pgd_iter: int,
@@ -440,6 +443,7 @@ def run_pretrained_eval(
     cfg = BackdoorConfig(
         style=style, color=color, position=position,
         target_label=target, alpha=alpha, source_label=source_label,
+        eps=backdoor_eps,
     )
     p_images, p_labels = poison_dataset(train_images, train_labels, cfg, rng=rng)
 
@@ -525,6 +529,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--color", type=float, default=0.3, help="Trigger pixel intensity 0-1 (default: 0.3)")
     p.add_argument("--position", type=int, nargs=2, default=None, help="Trigger position row col (default: dataset-dependent)")
     p.add_argument("--source-label", type=int, default=-1, help="Source class to poison (-1 = all non-target)")
+    p.add_argument(
+        "--backdoor-eps", type=float, default=None, metavar="EPS",
+        help="If set, clamp backdoor trigger perturbation to Linf <= EPS "
+             "(e.g. 0.03137 for 8/255). Without this, trigger pixels are "
+             "overwritten to --color directly (unbounded).",
+    )
 
     # Model source
     model_src = p.add_argument_group("model source")
@@ -604,6 +614,7 @@ def _make_run_dir(
         "color": args.color,
         "position": list(args.position) if args.position else None,
         "source_label": args.source_label,
+        "backdoor_eps": args.backdoor_eps,
         "adv_train": adv_flag,
         "epochs": args.epochs,
         "batch_size": args.batch_size,
@@ -640,7 +651,7 @@ def main(argv: list[str] | None = None) -> None:
     eval_common = dict(
         dataset_name=args.dataset,
         target=args.target, style=style, color=args.color, position=position,
-        source_label=args.source_label,
+        source_label=args.source_label, backdoor_eps=args.backdoor_eps,
         pgd_eps=args.pgd_eps, pgd_alpha=args.pgd_alpha,
         pgd_iter=args.pgd_iter, pgd_restarts=args.pgd_restarts,
         eval_subsample=args.eval_subsample,

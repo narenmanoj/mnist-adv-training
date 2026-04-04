@@ -21,6 +21,18 @@ class BackdoorConfig(NamedTuple):
     target_label: int = 0
     alpha: float = 0.0  # fraction of training set to poison
     source_label: int = -1  # -1 = all non-target classes
+    eps: float | None = None  # if set, clamp trigger perturbation to Linf <= eps
+
+
+def _trigger_pixels(style: BackdoorStyle, r: int, c: int) -> list[tuple[int, int]]:
+    """Return the list of (row, col) coordinates for a given trigger style."""
+    if style == BackdoorStyle.PIXEL:
+        return [(r, c)]
+    elif style == BackdoorStyle.PATTERN:
+        return [(r, c), (r - 1, c - 1), (r - 1, c + 1), (r + 1, c - 1), (r + 1, c + 1)]
+    elif style == BackdoorStyle.ELL:
+        return [(r, c), (r + 1, c), (r, c + 1)]
+    raise ValueError(f"Unknown style: {style}")
 
 
 def stamp(images: torch.Tensor, cfg: BackdoorConfig) -> torch.Tensor:
@@ -30,26 +42,33 @@ def stamp(images: torch.Tensor, cfg: BackdoorConfig) -> torch.Tensor:
         images: (N, C, H, W) tensor in [0, 1].  Works for any number of channels.
         cfg: Backdoor configuration.
 
+    When ``cfg.eps`` is None (default), trigger pixels are set to
+    ``cfg.color`` directly (the original behaviour).
+
+    When ``cfg.eps`` is set, the trigger is applied as a perturbation
+    clamped to an Linf ball of radius ``eps``.  Each trigger pixel is
+    shifted towards ``cfg.color`` by at most ``eps``, and the result is
+    clamped to [0, 1].  This guarantees ``||stamped - original||_inf <= eps``
+    everywhere.
+
     Returns:
         Stamped copy of the images.
     """
     out = images.clone()
-    r, c = cfg.position
-    val = cfg.color
+    pixels = _trigger_pixels(cfg.style, *cfg.position)
 
-    # Write to all channels so the trigger is visible in grayscale and RGB alike.
-    if cfg.style == BackdoorStyle.PIXEL:
-        out[:, :, r, c] = val
-    elif cfg.style == BackdoorStyle.PATTERN:
-        out[:, :, r, c] = val
-        out[:, :, r - 1, c - 1] = val
-        out[:, :, r - 1, c + 1] = val
-        out[:, :, r + 1, c - 1] = val
-        out[:, :, r + 1, c + 1] = val
-    elif cfg.style == BackdoorStyle.ELL:
-        out[:, :, r, c] = val
-        out[:, :, r + 1, c] = val
-        out[:, :, r, c + 1] = val
+    if cfg.eps is None:
+        # Absolute mode: overwrite pixels
+        for pr, pc in pixels:
+            out[:, :, pr, pc] = cfg.color
+    else:
+        # Bounded mode: perturb towards cfg.color, clamped to Linf ball
+        for pr, pc in pixels:
+            orig = images[:, :, pr, pc]
+            target = torch.full_like(orig, cfg.color)
+            delta = (target - orig).clamp(-cfg.eps, cfg.eps)
+            out[:, :, pr, pc] = (orig + delta).clamp(0.0, 1.0)
+
     return out
 
 
