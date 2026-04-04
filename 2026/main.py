@@ -17,8 +17,8 @@ Usage examples
 # Full sweep across alphas using a RobustBench model:
   python main.py --dataset cifar10 --sweep --target 7 --robustbench Wong2020Fast
 
-# Use a local pretrained checkpoint instead of training from scratch:
-  python main.py --dataset mnist --alpha 0.10 --checkpoint robust.pt
+# Disable TensorBoard logging:
+  python main.py --no-tensorboard
 """
 
 from __future__ import annotations
@@ -31,7 +31,9 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torchvision
+import torchvision.utils as vutils
 from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.tensorboard import SummaryWriter
 
 from attacks import pgd
 from backdoor import BackdoorConfig, BackdoorStyle, poison_dataset, stamp
@@ -190,6 +192,56 @@ def backdoor_success_rate(
 
 
 # ---------------------------------------------------------------------------
+# TensorBoard image logging
+# ---------------------------------------------------------------------------
+
+def _log_image_grid(
+    writer: SummaryWriter,
+    images: torch.Tensor,
+    labels: torch.Tensor,
+    tag: str,
+    global_step: int,
+    n: int = 16,
+) -> None:
+    """Log a grid of images with a per-image label annotation in the tag."""
+    imgs = images[:n].cpu()
+    labs = labels[:n].cpu().tolist()
+    grid = vutils.make_grid(imgs, nrow=8, normalize=False, padding=2)
+    label_str = ",".join(str(l) for l in labs)
+    writer.add_image(f"{tag} [labels={label_str}]", grid, global_step)
+
+
+def log_sample_images(
+    writer: SummaryWriter,
+    train_images: torch.Tensor,
+    train_labels: torch.Tensor,
+    cfg: BackdoorConfig,
+    global_step: int,
+    n: int = 16,
+) -> None:
+    """Log grids of clean and backdoored training images to TensorBoard."""
+    # Clean examples — pick a diverse set (first n)
+    _log_image_grid(writer, train_images, train_labels, "images/clean", global_step, n)
+
+    if cfg.alpha > 0:
+        # Pick non-target images, stamp them, show with both original and target labels
+        mask = train_labels != cfg.target_label
+        src_imgs = train_images[mask][:n].cpu()
+        src_labs = train_labels[mask][:n].cpu()
+
+        stamped = stamp(src_imgs, cfg)
+        orig_str = ",".join(str(l.item()) for l in src_labs)
+        target_str = str(cfg.target_label)
+
+        grid = vutils.make_grid(stamped, nrow=8, normalize=False, padding=2)
+        writer.add_image(
+            f"images/backdoored [orig={orig_str} -> target={target_str}]",
+            grid,
+            global_step,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Single experiment
 # ---------------------------------------------------------------------------
 
@@ -216,6 +268,8 @@ def run_single(
     robustbench_threat: str,
     device: torch.device,
     seed: int,
+    writer: SummaryWriter | None = None,
+    run_index: int = 0,
 ) -> dict:
     rng = torch.Generator().manual_seed(seed)
     torch.manual_seed(seed)
@@ -231,6 +285,11 @@ def run_single(
         target_label=target, alpha=alpha, source_label=source_label,
     )
     p_images, p_labels = poison_dataset(train_images, train_labels, cfg, rng=rng)
+
+    # Log sample images before moving to device
+    if writer is not None:
+        log_sample_images(writer, train_images, train_labels, cfg, global_step=run_index)
+
     p_images, p_labels = p_images.to(device), p_labels.to(device)
     test_images, test_labels = test_images.to(device), test_labels.to(device)
 
@@ -262,10 +321,11 @@ def run_single(
             pgd_eps=pgd_eps, pgd_alpha=pgd_alpha,
             pgd_iter=pgd_iter, pgd_restarts=pgd_restarts,
             device=device,
+            writer=writer,
+            global_step_offset=run_index * epochs,
         )
 
     # 3. Evaluate
-    # Subsample training set for faster robustness eval
     idx = torch.randperm(len(p_images), generator=rng)[:eval_subsample]
     sub_images, sub_labels = p_images[idx], p_labels[idx]
 
@@ -285,6 +345,19 @@ def run_single(
         "test": {"accuracy": test_acc, "binary_loss": 1 - test_acc, "robust_loss": 1 - test_robust},
         "backdoor_success": bd_rate,
     }
+
+    # Log eval scalars
+    if writer is not None:
+        step = run_index
+        writer.add_scalar("eval/train_accuracy", train_acc, step)
+        writer.add_scalar("eval/train_binary_loss", 1 - train_acc, step)
+        writer.add_scalar("eval/train_robust_loss", 1 - train_robust, step)
+        writer.add_scalar("eval/test_accuracy", test_acc, step)
+        writer.add_scalar("eval/test_binary_loss", 1 - test_acc, step)
+        writer.add_scalar("eval/test_robust_loss", 1 - test_robust, step)
+        if alpha > 0:
+            writer.add_scalar("eval/backdoor_success", bd_rate, step)
+        writer.flush()
 
     tag = robustbench_model or ("adv" if adv_train else "std")
     print(
@@ -325,7 +398,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--position", type=int, nargs=2, default=None, help="Trigger position row col (default: dataset-dependent)")
     p.add_argument("--source-label", type=int, default=-1, help="Source class to poison (-1 = all non-target)")
 
-    # Model source (mutually exclusive: train from scratch, local checkpoint, or RobustBench)
+    # Model source
     model_src = p.add_argument_group("model source")
     model_src.add_argument("--adv-train", action="store_true", help="Enable adversarial training (from scratch)")
     model_src.add_argument("--checkpoint", type=str, default=None, help="Path to pretrained model .pt file")
@@ -356,12 +429,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Eval
     p.add_argument("--eval-subsample", type=int, default=5000, help="Training subset size for robustness eval")
 
+    # TensorBoard
+    p.add_argument("--no-tensorboard", action="store_true", help="Disable TensorBoard logging")
+    p.add_argument("--logdir", type=str, default="runs", help="TensorBoard log directory (default: runs)")
+
     # Misc
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     p.add_argument("--device", type=str, default=None, help="Device (default: auto)")
     p.add_argument("--results-dir", type=str, default="results", help="Directory for result JSON files")
 
     return p.parse_args(argv)
+
+
+def _make_run_name(args: argparse.Namespace, adv: bool | None = None, alpha: float | None = None) -> str:
+    """Build a descriptive TensorBoard run name from the current config."""
+    parts = [args.dataset]
+    parts.append(f"target{args.target}")
+    a = alpha if alpha is not None else args.alpha
+    parts.append(f"alpha{a:.2f}")
+    if args.robustbench:
+        parts.append(f"rb_{args.robustbench}")
+    elif args.checkpoint:
+        parts.append("checkpoint")
+    else:
+        adv_flag = adv if adv is not None else args.adv_train
+        parts.append("adv" if adv_flag else "std")
+    parts.append(args.style)
+    return "/".join(parts)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -375,6 +469,7 @@ def main(argv: list[str] | None = None) -> None:
 
     style = BackdoorStyle(args.style)
     position = tuple(args.position) if args.position else None
+    use_tb = not args.no_tensorboard
 
     common = dict(
         dataset_name=args.dataset,
@@ -390,14 +485,22 @@ def main(argv: list[str] | None = None) -> None:
     if args.sweep:
         alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
         all_results: dict[str, dict[str, dict]] = {}
+        run_idx = 0
 
         for adv in (False, True):
             key = str(adv).lower()
             all_results[key] = {}
             for a in alphas:
                 print(f"\n=== {args.dataset}  target={args.target}  adv_train={adv}  alpha={a} ===")
-                r = run_single(alpha=a, adv_train=adv, **common)
+                writer = None
+                if use_tb:
+                    run_name = _make_run_name(args, adv=adv, alpha=a)
+                    writer = SummaryWriter(log_dir=str(Path(args.logdir) / run_name))
+                r = run_single(alpha=a, adv_train=adv, writer=writer, run_index=run_idx, **common)
                 all_results[key][str(a)] = r
+                if writer is not None:
+                    writer.close()
+                run_idx += 1
 
         out_dir = Path(args.results_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -406,8 +509,17 @@ def main(argv: list[str] | None = None) -> None:
         print(f"\nResults written to {out_path}")
     else:
         print(f"\n=== {args.dataset}  target={args.target}  adv_train={args.adv_train}  alpha={args.alpha} ===")
-        r = run_single(alpha=args.alpha, adv_train=args.adv_train, **common)
+        writer = None
+        if use_tb:
+            run_name = _make_run_name(args)
+            writer = SummaryWriter(log_dir=str(Path(args.logdir) / run_name))
+        r = run_single(alpha=args.alpha, adv_train=args.adv_train, writer=writer, run_index=0, **common)
+        if writer is not None:
+            writer.close()
         print(json.dumps(r, indent=2))
+
+    if use_tb:
+        print(f"\nTensorBoard logs in ./{args.logdir}/  — run: tensorboard --logdir {args.logdir}")
 
 
 if __name__ == "__main__":
