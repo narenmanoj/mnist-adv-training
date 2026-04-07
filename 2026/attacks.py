@@ -15,6 +15,21 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+# Small tolerance for floating-point accumulation in project/clamp chains.
+_ATOL = 1e-6
+
+
+def _check_perturbation(x_adv: torch.Tensor, x: torch.Tensor, eps: float) -> None:
+    """Assert that x_adv is inside the Linf ball of radius eps around x and in [0, 1]."""
+    linf = (x_adv - x).abs().max().item()
+    assert linf <= eps + _ATOL, (
+        f"Linf perturbation {linf:.6f} exceeds eps={eps} (tol={_ATOL})"
+    )
+    lo, hi = x_adv.min().item(), x_adv.max().item()
+    assert lo >= -_ATOL and hi <= 1.0 + _ATOL, (
+        f"x_adv pixel values out of [0, 1]: min={lo:.6f}, max={hi:.6f}"
+    )
+
 
 def _project(x_adv: torch.Tensor, x: torch.Tensor, eps: float) -> torch.Tensor:
     """Project x_adv into the L-inf ball of radius eps around x, clamped to [0, 1]."""
@@ -33,7 +48,9 @@ def fgsm(
     x_adv = x.clone().detach().requires_grad_(True)
     loss = loss_fn(model(x_adv), y)
     loss.backward()
-    return _project(x_adv + eps * x_adv.grad.sign(), x, eps).detach()
+    result = _project(x_adv + eps * x_adv.grad.sign(), x, eps).detach()
+    _check_perturbation(result, x, eps)
+    return result
 
 
 def _pgd_chunk(
@@ -71,6 +88,7 @@ def _pgd_chunk(
         best_adv = x_adv[best_r, torch.arange(B, device=x.device)]
         best_loss = loss[best_r, torch.arange(B, device=x.device)]
 
+    _check_perturbation(best_adv, x, eps)
     return best_adv, best_loss
 
 
