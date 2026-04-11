@@ -51,6 +51,7 @@ from tqdm import tqdm
 from attacks import pgd
 from backdoor import BackdoorConfig, BackdoorStyle, poison_dataset, stamp
 from model import SmallCNN, compile_model, _get_amp_dtype, train
+from wide_resnet import WideResNet
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +154,36 @@ def load_robustbench_model(
         threat_model=threat_model,
         model_dir=model_dir,
     )
+
+
+# ---------------------------------------------------------------------------
+# Model construction
+# ---------------------------------------------------------------------------
+
+def build_model(arch: str, info: DatasetInfo) -> nn.Module:
+    """Construct a model from an architecture string.
+
+    ``arch`` is either ``"small"`` for SmallCNN, or ``"wrn-D-W"`` for
+    WideResNet-D-W (e.g. ``"wrn-28-10"``).
+    """
+    if arch == "small":
+        return SmallCNN(
+            in_channels=info.in_channels,
+            img_size=info.img_size,
+            num_classes=info.num_classes,
+        )
+    if arch.startswith("wrn-"):
+        parts = arch.split("-")
+        if len(parts) != 3:
+            raise ValueError(f"Expected 'wrn-DEPTH-WIDTH', got '{arch}'")
+        depth, width = int(parts[1]), int(parts[2])
+        return WideResNet(
+            depth=depth,
+            width=width,
+            num_classes=info.num_classes,
+            in_channels=info.in_channels,
+        )
+    raise ValueError(f"Unknown architecture: {arch!r}. Use 'small' or 'wrn-D-W'.")
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +333,7 @@ def run_single(
     pgd_iter: int,
     pgd_restarts: int,
     eval_subsample: int,
+    arch: str,
     checkpoint: str | None,
     robustbench_model: str | None,
     robustbench_threat: str,
@@ -336,26 +368,32 @@ def run_single(
 
     # 2. Build / load model
     if robustbench_model:
-        model = compile_model(load_robustbench_model(
+        model = load_robustbench_model(
             robustbench_model, info,
             threat_model=robustbench_threat,
-        ).to(device))
-        print(f"  loaded RobustBench model: {robustbench_model} ({robustbench_threat})")
-    elif checkpoint:
-        model = SmallCNN(
-            in_channels=info.in_channels,
-            img_size=info.img_size,
-            num_classes=info.num_classes,
         ).to(device)
+        print(f"  loaded RobustBench model: {robustbench_model} ({robustbench_threat})")
+        if adv_train or epochs > 0:
+            # Finetune the pretrained model on the (poisoned) training set
+            model = train(
+                model, p_images, p_labels,
+                epochs=epochs, batch_size=batch_size, lr=lr,
+                adv_train=adv_train,
+                pgd_eps=pgd_eps, pgd_alpha=pgd_alpha,
+                pgd_iter=pgd_iter, pgd_restarts=pgd_restarts,
+                device=device,
+                writer=writer,
+                global_step_offset=run_index * epochs,
+            )
+        else:
+            model = compile_model(model)
+    elif checkpoint:
+        model = build_model(arch, info).to(device)
         model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True))
         model = compile_model(model)
         print(f"  loaded checkpoint {checkpoint}")
     else:
-        model = SmallCNN(
-            in_channels=info.in_channels,
-            img_size=info.img_size,
-            num_classes=info.num_classes,
-        ).to(device)
+        model = build_model(arch, info).to(device)
         model = train(
             model, p_images, p_labels,
             epochs=epochs, batch_size=batch_size, lr=lr,
@@ -562,13 +600,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--robustbench", type=str, default=None, metavar="MODEL",
         help="Load a pretrained robust model from RobustBench by name "
              "(e.g. Carmon2019Unlabeled, Wong2020Fast). "
-             "Skips training entirely — eval only. "
+             "Eval-only by default; combine with --finetune to continue "
+             "training on the (poisoned) dataset. "
              "Requires: pip install robustbench",
     )
     model_src.add_argument(
         "--robustbench-threat", type=str, default="Linf",
         choices=["Linf", "L2", "corruptions"],
         help="RobustBench threat model (default: Linf)",
+    )
+    model_src.add_argument(
+        "--finetune", action="store_true",
+        help="When used with --robustbench, continue adversarial training "
+             "on the (poisoned) dataset instead of eval-only.",
+    )
+
+    # Architecture
+    p.add_argument(
+        "--arch", type=str, default="small",
+        help="Model architecture: 'small' for SmallCNN, or 'wrn-D-W' for "
+             "WideResNet-D-W (e.g. wrn-28-10, wrn-70-16). Default: small",
     )
 
     # Training (ignored when --robustbench is set)
@@ -642,6 +693,7 @@ def _make_run_dir(
         "pgd_iter": args.pgd_iter,
         "pgd_restarts": args.pgd_restarts,
         "eval_subsample": args.eval_subsample,
+        "arch": args.arch,
         "robustbench_model": args.robustbench,
         "robustbench_threat": args.robustbench_threat,
         "checkpoint": args.checkpoint,
@@ -677,7 +729,7 @@ def main(argv: list[str] | None = None) -> None:
         device=device, seed=args.seed,
     )
 
-    if args.robustbench:
+    if args.robustbench and not args.finetune:
         # ---- Pretrained robust model: eval-only, no training ----
         if args.sweep:
             alphas = [0.00, 0.05, 0.15, 0.20, 0.30]
@@ -723,12 +775,14 @@ def main(argv: list[str] | None = None) -> None:
                 writer.close()
             print(json.dumps(r, indent=2))
     else:
-        # ---- Train from scratch (or load checkpoint) ----
+        # ---- Train from scratch, finetune RobustBench model, or load checkpoint ----
         train_common = dict(
             **eval_common,
+            arch=args.arch,
             epochs=args.epochs, lr=args.lr,
             checkpoint=args.checkpoint,
-            robustbench_model=None, robustbench_threat=args.robustbench_threat,
+            robustbench_model=args.robustbench,
+            robustbench_threat=args.robustbench_threat,
         )
 
         if args.sweep:
