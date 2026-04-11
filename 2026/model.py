@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
@@ -62,6 +63,58 @@ def compile_model(model: nn.Module) -> nn.Module:
         return model
 
 
+@dataclass
+class ValConfig:
+    """Optional validation data + PGD params for mid-training evaluation."""
+    train_images: torch.Tensor
+    train_labels: torch.Tensor
+    val_images: torch.Tensor
+    val_labels: torch.Tensor
+    pgd_eps: float
+    pgd_alpha: float
+    pgd_iter: int
+    pgd_restarts: int
+    eval_batch_size: int = 128
+
+
+def _run_eval(
+    model: nn.Module,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    pgd_eps: float,
+    pgd_alpha: float,
+    pgd_iter: int,
+    pgd_restarts: int,
+    batch_size: int,
+    device: torch.device,
+    amp_dtype: torch.dtype | None,
+) -> tuple[float, float, float]:
+    """Compute (misclassification_rate, robust_loss, robust_error) on a dataset.
+
+    Returns all three in a single PGD pass.
+    """
+    model.eval()
+    use_amp = amp_dtype is not None
+    loss_fn = nn.CrossEntropyLoss(reduction="none")
+    loader = DataLoader(TensorDataset(x, y), batch_size=batch_size)
+    wrong_clean = 0
+    wrong_robust = 0
+    total_robust_loss = 0.0
+    total = 0
+    for xb, yb in loader:
+        with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
+            with torch.no_grad():
+                wrong_clean += (model(xb).argmax(1) != yb).sum().item()
+            x_adv = pgd(model, xb, yb, eps=pgd_eps, alpha=pgd_alpha,
+                        num_iter=pgd_iter, restarts=pgd_restarts)
+            with torch.no_grad():
+                logits = model(x_adv)
+                total_robust_loss += loss_fn(logits, yb).sum().item()
+                wrong_robust += (logits.argmax(1) != yb).sum().item()
+        total += len(xb)
+    return wrong_clean / total, total_robust_loss / total, wrong_robust / total
+
+
 def train(
     model: nn.Module,
     images: torch.Tensor,
@@ -78,12 +131,19 @@ def train(
     device: torch.device | str = "cpu",
     writer: SummaryWriter | None = None,
     global_step_offset: int = 0,
+    val_config: ValConfig | None = None,
+    eval_every: int = 0,
 ) -> nn.Module:
     """Train the model, optionally with adversarial training via PGD.
 
     When ``adv_train`` is True each batch is augmented with adversarial
     examples generated on the fly, matching the original CustomModel
     behaviour.
+
+    If *val_config* and *eval_every* > 0 are provided, a full evaluation
+    (misclassification rate, robust loss, robust error) is run on both the
+    training subsample and validation set every *eval_every* epochs and
+    logged to TensorBoard.
 
     Performance: uses torch.compile + mixed-precision autocast automatically
     when the device supports it.
@@ -151,6 +211,38 @@ def train(
                         writer.add_scalar("train/robust_loss", robust_loss, global_step)
 
         avg_loss = total_loss / n_batches
-        print(f"  epoch {epoch + 1}/{epochs}  avg_loss={avg_loss:.4f}")
+        epoch_num = epoch + 1
+        print(f"  epoch {epoch_num}/{epochs}  avg_loss={avg_loss:.4f}")
+
+        # Periodic full evaluation
+        if val_config is not None and eval_every > 0 and epoch_num % eval_every == 0 and writer is not None:
+            vc = val_config
+            print(f"  running mid-training eval (epoch {epoch_num})...")
+
+            train_misclf, train_rloss, train_rerr = _run_eval(
+                model, vc.train_images, vc.train_labels,
+                vc.pgd_eps, vc.pgd_alpha, vc.pgd_iter, vc.pgd_restarts,
+                vc.eval_batch_size, device, amp_dtype,
+            )
+            val_misclf, val_rloss, val_rerr = _run_eval(
+                model, vc.val_images, vc.val_labels,
+                vc.pgd_eps, vc.pgd_alpha, vc.pgd_iter, vc.pgd_restarts,
+                vc.eval_batch_size, device, amp_dtype,
+            )
+
+            writer.add_scalar("eval/train_misclf_rate", train_misclf, global_step)
+            writer.add_scalar("eval/train_robust_loss", train_rloss, global_step)
+            writer.add_scalar("eval/train_robust_error", train_rerr, global_step)
+            writer.add_scalar("eval/val_misclf_rate", val_misclf, global_step)
+            writer.add_scalar("eval/val_robust_loss", val_rloss, global_step)
+            writer.add_scalar("eval/val_robust_error", val_rerr, global_step)
+            writer.flush()
+
+            print(
+                f"    train: misclf={train_misclf:.3f}  robust_loss={train_rloss:.4f}  robust_err={train_rerr:.3f}  |  "
+                f"val: misclf={val_misclf:.3f}  robust_loss={val_rloss:.4f}  robust_err={val_rerr:.3f}"
+            )
+
+            model.train()
 
     return model

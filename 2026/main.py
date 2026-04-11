@@ -50,7 +50,7 @@ from tqdm import tqdm
 
 from attacks import pgd
 from backdoor import BackdoorConfig, BackdoorStyle, poison_dataset, stamp
-from model import SmallCNN, compile_model, _get_amp_dtype, train
+from model import SmallCNN, ValConfig, compile_model, _get_amp_dtype, train
 from wide_resnet import WideResNet
 
 
@@ -337,6 +337,7 @@ def run_single(
     checkpoint: str | None,
     robustbench_model: str | None,
     robustbench_threat: str,
+    eval_every: int,
     device: torch.device,
     seed: int,
     writer: SummaryWriter | None = None,
@@ -366,6 +367,27 @@ def run_single(
     p_images, p_labels = p_images.to(device), p_labels.to(device)
     test_images, test_labels = test_images.to(device), test_labels.to(device)
 
+    # Build val config for mid-training eval
+    val_cfg = None
+    if eval_every > 0 and writer is not None:
+        eval_idx = torch.randperm(len(p_images), generator=rng)[:eval_subsample]
+        val_cfg = ValConfig(
+            train_images=p_images[eval_idx], train_labels=p_labels[eval_idx],
+            val_images=test_images, val_labels=test_labels,
+            pgd_eps=pgd_eps, pgd_alpha=pgd_alpha,
+            pgd_iter=pgd_iter, pgd_restarts=pgd_restarts,
+        )
+
+    train_kwargs = dict(
+        epochs=epochs, batch_size=batch_size, lr=lr,
+        adv_train=adv_train,
+        pgd_eps=pgd_eps, pgd_alpha=pgd_alpha,
+        pgd_iter=pgd_iter, pgd_restarts=pgd_restarts,
+        device=device, writer=writer,
+        global_step_offset=run_index * epochs,
+        val_config=val_cfg, eval_every=eval_every,
+    )
+
     # 2. Build / load model
     if robustbench_model:
         model = load_robustbench_model(
@@ -374,17 +396,7 @@ def run_single(
         ).to(device)
         print(f"  loaded RobustBench model: {robustbench_model} ({robustbench_threat})")
         if adv_train or epochs > 0:
-            # Finetune the pretrained model on the (poisoned) training set
-            model = train(
-                model, p_images, p_labels,
-                epochs=epochs, batch_size=batch_size, lr=lr,
-                adv_train=adv_train,
-                pgd_eps=pgd_eps, pgd_alpha=pgd_alpha,
-                pgd_iter=pgd_iter, pgd_restarts=pgd_restarts,
-                device=device,
-                writer=writer,
-                global_step_offset=run_index * epochs,
-            )
+            model = train(model, p_images, p_labels, **train_kwargs)
         else:
             model = compile_model(model)
     elif checkpoint:
@@ -394,16 +406,7 @@ def run_single(
         print(f"  loaded checkpoint {checkpoint}")
     else:
         model = build_model(arch, info).to(device)
-        model = train(
-            model, p_images, p_labels,
-            epochs=epochs, batch_size=batch_size, lr=lr,
-            adv_train=adv_train,
-            pgd_eps=pgd_eps, pgd_alpha=pgd_alpha,
-            pgd_iter=pgd_iter, pgd_restarts=pgd_restarts,
-            device=device,
-            writer=writer,
-            global_step_offset=run_index * epochs,
-        )
+        model = train(model, p_images, p_labels, **train_kwargs)
 
     # 3. Evaluate
     idx = torch.randperm(len(p_images), generator=rng)[:eval_subsample]
@@ -635,6 +638,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     # Eval
     p.add_argument("--eval-subsample", type=int, default=5000, help="Training subset size for robustness eval")
+    p.add_argument(
+        "--eval-every", type=int, default=0, metavar="N",
+        help="Run full robust eval every N epochs during training and log to "
+             "TensorBoard (0 = disabled, only eval after training). "
+             "Evaluates on both a training subsample and the test set.",
+    )
 
     # TensorBoard
     p.add_argument("--no-tensorboard", action="store_true", help="Disable TensorBoard logging")
@@ -693,6 +702,7 @@ def _make_run_dir(
         "pgd_iter": args.pgd_iter,
         "pgd_restarts": args.pgd_restarts,
         "eval_subsample": args.eval_subsample,
+        "eval_every": args.eval_every,
         "arch": args.arch,
         "robustbench_model": args.robustbench,
         "robustbench_threat": args.robustbench_threat,
@@ -780,6 +790,7 @@ def main(argv: list[str] | None = None) -> None:
             **eval_common,
             arch=args.arch,
             epochs=args.epochs, lr=args.lr,
+            eval_every=args.eval_every,
             checkpoint=args.checkpoint,
             robustbench_model=args.robustbench,
             robustbench_threat=args.robustbench_threat,
