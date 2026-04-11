@@ -174,7 +174,7 @@ def accuracy(model: nn.Module, x: torch.Tensor, y: torch.Tensor, batch_size: int
     return correct / total
 
 
-def robust_error_rate(
+def robust_eval(
     model: nn.Module,
     x: torch.Tensor,
     y: torch.Tensor,
@@ -184,31 +184,35 @@ def robust_error_rate(
     pgd_restarts: int,
     batch_size: int = 128,
     desc: str = "robust eval",
-) -> float:
-    """Expected robust error rate against ground-truth labels.
+) -> tuple[float, float]:
+    r"""Compute robust loss and robust error rate under PGD attack.
 
-    For each (x, y), PGD searches for x' in B_inf(x, eps) that maximises the
-    cross-entropy loss against y.  The robust error rate is the fraction of
-    inputs where the model misclassifies the adversarial example:
-    f(x') != y.
+    Returns ``(robust_loss, robust_error_rate)`` where:
 
-    This matches the original TensorFlow implementation and the standard
-    robust-accuracy definition (robust_error = 1 - robust_accuracy).
+    - **robust_loss**: expected worst-case cross-entropy,
+      :math:`\frac{1}{m}\sum_{i=1}^{m}\max_{\hat x \in B(x_i,\delta)} L_h(\hat x, y_i)`
+    - **robust_error_rate**: fraction misclassified after PGD,
+      :math:`1 - \text{robust\_accuracy}` (matches the original TF ``Robust Loss`` metric).
     """
     model.eval()
     device = next(model.parameters()).device
     amp_dtype = _get_amp_dtype(device)
     use_amp = amp_dtype is not None
+    loss_fn = nn.CrossEntropyLoss(reduction="none")
     loader = DataLoader(TensorDataset(x, y), batch_size=batch_size)
-    wrong = total = 0
+    total_loss = 0.0
+    wrong = 0
+    total = 0
     for xb, yb in tqdm(loader, desc=desc, unit="batch", leave=False):
         with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
             x_adv = pgd(model, xb, yb, eps=eps, alpha=pgd_alpha,
                          num_iter=pgd_iter, restarts=pgd_restarts)
             with torch.no_grad():
-                wrong += (model(x_adv).argmax(1) != yb).sum().item()
+                logits = model(x_adv)
+                total_loss += loss_fn(logits, yb).sum().item()
+                wrong += (logits.argmax(1) != yb).sum().item()
         total += len(xb)
-    return wrong / total
+    return total_loss / total, wrong / total
 
 
 def backdoor_success_rate(
@@ -320,7 +324,7 @@ def run_single(
         target_label=target, alpha=alpha, source_label=source_label,
         eps=backdoor_eps,
     )
-    p_images, p_labels = poison_dataset(train_images, train_labels, cfg, rng=rng)
+    p_images, p_labels = poison_dataset(train_images, train_labels, cfg, batch_size=batch_size, rng=rng)
 
     # Log sample images before moving to device
     if writer is not None:
@@ -369,9 +373,9 @@ def run_single(
 
     print("  evaluating...")
     train_acc = accuracy(model, sub_images, sub_labels, desc="train accuracy")
-    train_rerr = robust_error_rate(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
+    train_rloss, train_rerr = robust_eval(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
     test_acc = accuracy(model, test_images, test_labels, desc="test accuracy")
-    test_rerr = robust_error_rate(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="test robust")
+    test_rloss, test_rerr = robust_eval(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="test robust")
     bd_rate = backdoor_success_rate(model, test_images, test_labels, cfg) if alpha > 0 else 0.0
 
     results = {
@@ -380,8 +384,8 @@ def run_single(
         "adv_train": adv_train,
         "robustbench_model": robustbench_model,
         "target": target,
-        "train": {"accuracy": train_acc, "binary_loss": 1 - train_acc, "robust_error": train_rerr},
-        "test": {"accuracy": test_acc, "binary_loss": 1 - test_acc, "robust_error": test_rerr},
+        "train": {"accuracy": train_acc, "binary_loss": 1 - train_acc, "robust_loss": train_rloss, "robust_error": train_rerr},
+        "test": {"accuracy": test_acc, "binary_loss": 1 - test_acc, "robust_loss": test_rloss, "robust_error": test_rerr},
         "backdoor_success": bd_rate,
     }
 
@@ -390,9 +394,11 @@ def run_single(
         step = run_index
         writer.add_scalar("eval/train_accuracy", train_acc, step)
         writer.add_scalar("eval/train_binary_loss", 1 - train_acc, step)
+        writer.add_scalar("eval/train_robust_loss", train_rloss, step)
         writer.add_scalar("eval/train_robust_error", train_rerr, step)
         writer.add_scalar("eval/test_accuracy", test_acc, step)
         writer.add_scalar("eval/test_binary_loss", 1 - test_acc, step)
+        writer.add_scalar("eval/test_robust_loss", test_rloss, step)
         writer.add_scalar("eval/test_robust_error", test_rerr, step)
         if alpha > 0:
             writer.add_scalar("eval/backdoor_success", bd_rate, step)
@@ -401,15 +407,13 @@ def run_single(
     tag = robustbench_model or ("adv" if adv_train else "std")
     print(
         f"  [{tag}] alpha={alpha:.2f}  "
-        f"train_acc={train_acc:.3f}  train_robust_err={train_rerr:.3f}  "
-        f"test_acc={test_acc:.3f}  test_robust_err={test_rerr:.3f}  "
+        f"train_acc={train_acc:.3f}  train_robust_loss={train_rloss:.4f}  train_robust_err={train_rerr:.3f}  "
+        f"test_acc={test_acc:.3f}  test_robust_loss={test_rloss:.4f}  test_robust_err={test_rerr:.3f}  "
         f"backdoor={bd_rate:.3f}"
     )
 
-    if alpha > 0 and train_rerr < 0.5:
-        print("  -> Training set is backdoored but model is robust anyway.")
-    elif alpha > 0:
-        print("  -> Training set is backdoored and model is NOT robust.")
+    if alpha > 0:
+        print(f"  -> Training set is backdoored (alpha={alpha:.2f}).")
     else:
         print("  -> Clean training set.")
 
@@ -478,9 +482,9 @@ def run_pretrained_eval(
 
     print("  evaluating...")
     train_acc = accuracy(model, sub_images, sub_labels, desc="train accuracy")
-    train_rerr = robust_error_rate(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
+    train_rloss, train_rerr = robust_eval(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
     val_acc = accuracy(model, test_images, test_labels, desc="val accuracy")
-    val_rerr = robust_error_rate(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="val robust")
+    val_rloss, val_rerr = robust_eval(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="val robust")
     bd_rate = backdoor_success_rate(model, test_images, test_labels, cfg) if alpha > 0 else 0.0
 
     results = {
@@ -489,16 +493,18 @@ def run_pretrained_eval(
         "robustbench_model": robustbench_model,
         "robustbench_threat": robustbench_threat,
         "target": target,
-        "train": {"accuracy": train_acc, "binary_loss": 1 - train_acc, "robust_error": train_rerr},
-        "val": {"accuracy": val_acc, "binary_loss": 1 - val_acc, "robust_error": val_rerr},
+        "train": {"accuracy": train_acc, "binary_loss": 1 - train_acc, "robust_loss": train_rloss, "robust_error": train_rerr},
+        "val": {"accuracy": val_acc, "binary_loss": 1 - val_acc, "robust_loss": val_rloss, "robust_error": val_rerr},
         "backdoor_success": bd_rate,
     }
 
     if writer is not None:
         step = run_index
         writer.add_scalar("eval/train_accuracy", train_acc, step)
+        writer.add_scalar("eval/train_robust_loss", train_rloss, step)
         writer.add_scalar("eval/train_robust_error", train_rerr, step)
         writer.add_scalar("eval/val_accuracy", val_acc, step)
+        writer.add_scalar("eval/val_robust_loss", val_rloss, step)
         writer.add_scalar("eval/val_robust_error", val_rerr, step)
         if alpha > 0:
             writer.add_scalar("eval/backdoor_success", bd_rate, step)
@@ -506,15 +512,13 @@ def run_pretrained_eval(
 
     print(
         f"  [{robustbench_model}] alpha={alpha:.2f}  "
-        f"train_acc={train_acc:.3f}  train_robust_err={train_rerr:.3f}  "
-        f"val_acc={val_acc:.3f}  val_robust_err={val_rerr:.3f}  "
+        f"train_acc={train_acc:.3f}  train_robust_loss={train_rloss:.4f}  train_robust_err={train_rerr:.3f}  "
+        f"val_acc={val_acc:.3f}  val_robust_loss={val_rloss:.4f}  val_robust_err={val_rerr:.3f}  "
         f"backdoor={bd_rate:.3f}"
     )
 
-    if alpha > 0 and train_rerr < 0.5:
-        print("  -> Training set is backdoored but model is robust anyway.")
-    elif alpha > 0:
-        print("  -> Training set is backdoored and model is NOT robust.")
+    if alpha > 0:
+        print(f"  -> Training set is backdoored (alpha={alpha:.2f}).")
     else:
         print("  -> Clean training/val sets.")
 

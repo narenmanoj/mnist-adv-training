@@ -76,6 +76,7 @@ def poison_dataset(
     images: torch.Tensor,
     labels: torch.Tensor,
     cfg: BackdoorConfig,
+    batch_size: int = 32,
     rng: torch.Generator | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return a poisoned copy of the dataset.
@@ -83,10 +84,20 @@ def poison_dataset(
     Non-poisoned examples are kept as-is. Poisoned examples are appended with
     their labels flipped to ``cfg.target_label``.
 
+    The number of poisoned examples is computed to match the original TF
+    implementation::
+
+        num_batches_to_add = int((alpha / (1 - alpha)) * (N / batch_size))
+        n_poison = num_batches_to_add * batch_size
+
+    This ensures the poisoned fraction of the final dataset is approximately
+    ``alpha``, aligned to batch boundaries.
+
     Args:
         images: (N, C, H, W) tensor in [0, 1].
         labels: (N,) integer tensor.
         cfg: Backdoor configuration.
+        batch_size: Batch size used for training (for batch-aligned count).
         rng: Optional torch Generator for reproducibility.
 
     Returns:
@@ -102,8 +113,11 @@ def poison_dataset(
         mask = labels == cfg.source_label
     source_images = images[mask]
 
-    # Decide how many to poison
-    n_poison = int(len(images) * cfg.alpha)
+    # Batch-aligned poison count matching the original TF formula
+    N = len(images)
+    num_original_batches = N / batch_size
+    num_batches_to_add = int((cfg.alpha / (1 - cfg.alpha)) * num_original_batches)
+    n_poison = num_batches_to_add * batch_size
     n_poison = min(n_poison, len(source_images))
     if n_poison == 0:
         return images, labels
