@@ -56,18 +56,17 @@ def stamp(images: torch.Tensor, cfg: BackdoorConfig) -> torch.Tensor:
     """
     out = images.clone()
     pixels = _trigger_pixels(cfg.style, *cfg.position)
+    rows = torch.tensor([p[0] for p in pixels], device=images.device)
+    cols = torch.tensor([p[1] for p in pixels], device=images.device)
 
+    # Index into (N, C, H, W) — select all samples and channels, specific (r, c) pairs.
+    # out[:, :, rows, cols] has shape (N, C, len(pixels)).
     if cfg.eps is None:
-        # Absolute mode: overwrite pixels
-        for pr, pc in pixels:
-            out[:, :, pr, pc] = cfg.color
+        out[:, :, rows, cols] = cfg.color
     else:
-        # Bounded mode: perturb towards cfg.color, clamped to Linf ball
-        for pr, pc in pixels:
-            orig = images[:, :, pr, pc]
-            target = torch.full_like(orig, cfg.color)
-            delta = (target - orig).clamp(-cfg.eps, cfg.eps)
-            out[:, :, pr, pc] = (orig + delta).clamp(0.0, 1.0)
+        orig = images[:, :, rows, cols]
+        delta = (cfg.color - orig).clamp(-cfg.eps, cfg.eps)
+        out[:, :, rows, cols] = (orig + delta).clamp(0.0, 1.0)
 
     return out
 
