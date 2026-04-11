@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -75,6 +77,7 @@ class ValConfig:
     pgd_iter: int
     pgd_restarts: int
     eval_batch_size: int = 128
+    eval_device: torch.device | None = None  # second GPU for async eval
 
 
 def _run_eval(
@@ -115,6 +118,57 @@ def _run_eval(
     return wrong_clean / total, total_robust_loss / total, wrong_robust / total
 
 
+def _async_eval_worker(
+    state_dict: dict,
+    model_factory: callable,
+    vc: ValConfig,
+    eval_device: torch.device,
+    amp_dtype: torch.dtype | None,
+    writer: SummaryWriter,
+    global_step: int,
+    epoch_num: int,
+) -> None:
+    """Background thread: copies model to eval_device, runs eval, logs to TB."""
+    # Rebuild model on the eval device
+    eval_model = model_factory()
+    eval_model.load_state_dict(state_dict)
+    eval_model.to(eval_device)
+    eval_model.eval()
+
+    # Move eval data to eval device
+    train_x = vc.train_images.to(eval_device)
+    train_y = vc.train_labels.to(eval_device)
+    val_x = vc.val_images.to(eval_device)
+    val_y = vc.val_labels.to(eval_device)
+
+    eval_amp = _get_amp_dtype(eval_device)
+
+    train_misclf, train_rloss, train_rerr = _run_eval(
+        eval_model, train_x, train_y,
+        vc.pgd_eps, vc.pgd_alpha, vc.pgd_iter, vc.pgd_restarts,
+        vc.eval_batch_size, eval_device, eval_amp,
+    )
+    val_misclf, val_rloss, val_rerr = _run_eval(
+        eval_model, val_x, val_y,
+        vc.pgd_eps, vc.pgd_alpha, vc.pgd_iter, vc.pgd_restarts,
+        vc.eval_batch_size, eval_device, eval_amp,
+    )
+
+    writer.add_scalar("eval/train_misclf_rate", train_misclf, global_step)
+    writer.add_scalar("eval/train_robust_loss", train_rloss, global_step)
+    writer.add_scalar("eval/train_robust_error", train_rerr, global_step)
+    writer.add_scalar("eval/val_misclf_rate", val_misclf, global_step)
+    writer.add_scalar("eval/val_robust_loss", val_rloss, global_step)
+    writer.add_scalar("eval/val_robust_error", val_rerr, global_step)
+    writer.flush()
+
+    print(
+        f"    [eval epoch {epoch_num}] "
+        f"train: misclf={train_misclf:.3f}  robust_loss={train_rloss:.4f}  robust_err={train_rerr:.3f}  |  "
+        f"val: misclf={val_misclf:.3f}  robust_loss={val_rloss:.4f}  robust_err={val_rerr:.3f}"
+    )
+
+
 def train(
     model: nn.Module,
     images: torch.Tensor,
@@ -145,6 +199,11 @@ def train(
     training subsample and validation set every *eval_every* epochs and
     logged to TensorBoard.
 
+    When ``val_config.eval_device`` is set to a second GPU, evaluation runs
+    asynchronously in a background thread on that device while training
+    continues on the primary device.  Otherwise evaluation runs synchronously
+    on the training device.
+
     Performance: uses torch.compile + mixed-precision autocast automatically
     when the device supports it.
     """
@@ -160,6 +219,25 @@ def train(
     amp_dtype = _get_amp_dtype(device)
     use_amp = amp_dtype is not None
     scaler = torch.amp.GradScaler(enabled=use_amp and amp_dtype == torch.float16)
+
+    # For async eval we need a factory that can reconstruct the model architecture
+    # on the eval device.  deepcopy the initial model (before compile) as a template.
+    eval_thread: threading.Thread | None = None
+    use_async_eval = (
+        val_config is not None
+        and val_config.eval_device is not None
+        and val_config.eval_device != device
+    )
+    if use_async_eval:
+        # Build a factory that recreates the architecture on demand.
+        # We deepcopy before compile so we have a clean nn.Module.
+        _template = copy.deepcopy(model)
+        # Unwrap compiled model if needed
+        if hasattr(_template, "_orig_mod"):
+            _template = _template._orig_mod
+        model_factory = lambda: copy.deepcopy(_template).cpu()
+    else:
+        model_factory = None
 
     global_step = global_step_offset
     model.train()
@@ -217,32 +295,65 @@ def train(
         # Periodic full evaluation
         if val_config is not None and eval_every > 0 and epoch_num % eval_every == 0 and writer is not None:
             vc = val_config
-            print(f"  running mid-training eval (epoch {epoch_num})...")
 
-            train_misclf, train_rloss, train_rerr = _run_eval(
-                model, vc.train_images, vc.train_labels,
-                vc.pgd_eps, vc.pgd_alpha, vc.pgd_iter, vc.pgd_restarts,
-                vc.eval_batch_size, device, amp_dtype,
-            )
-            val_misclf, val_rloss, val_rerr = _run_eval(
-                model, vc.val_images, vc.val_labels,
-                vc.pgd_eps, vc.pgd_alpha, vc.pgd_iter, vc.pgd_restarts,
-                vc.eval_batch_size, device, amp_dtype,
-            )
+            if use_async_eval:
+                # Wait for any previous eval to finish before snapshotting
+                if eval_thread is not None and eval_thread.is_alive():
+                    print(f"  waiting for previous eval to finish...")
+                    eval_thread.join()
 
-            writer.add_scalar("eval/train_misclf_rate", train_misclf, global_step)
-            writer.add_scalar("eval/train_robust_loss", train_rloss, global_step)
-            writer.add_scalar("eval/train_robust_error", train_rerr, global_step)
-            writer.add_scalar("eval/val_misclf_rate", val_misclf, global_step)
-            writer.add_scalar("eval/val_robust_loss", val_rloss, global_step)
-            writer.add_scalar("eval/val_robust_error", val_rerr, global_step)
-            writer.flush()
+                # Snapshot weights (CPU copy to avoid blocking training GPU)
+                state_dict = {k: v.cpu() for k, v in model.state_dict().items()}
+                print(f"  launching async eval on {vc.eval_device} (epoch {epoch_num})...")
 
-            print(
-                f"    train: misclf={train_misclf:.3f}  robust_loss={train_rloss:.4f}  robust_err={train_rerr:.3f}  |  "
-                f"val: misclf={val_misclf:.3f}  robust_loss={val_rloss:.4f}  robust_err={val_rerr:.3f}"
-            )
+                eval_thread = threading.Thread(
+                    target=_async_eval_worker,
+                    kwargs=dict(
+                        state_dict=state_dict,
+                        model_factory=model_factory,
+                        vc=vc,
+                        eval_device=vc.eval_device,
+                        amp_dtype=_get_amp_dtype(vc.eval_device),
+                        writer=writer,
+                        global_step=global_step,
+                        epoch_num=epoch_num,
+                    ),
+                    daemon=True,
+                )
+                eval_thread.start()
+            else:
+                # Synchronous eval on the training device
+                print(f"  running mid-training eval (epoch {epoch_num})...")
+
+                train_misclf, train_rloss, train_rerr = _run_eval(
+                    model, vc.train_images, vc.train_labels,
+                    vc.pgd_eps, vc.pgd_alpha, vc.pgd_iter, vc.pgd_restarts,
+                    vc.eval_batch_size, device, amp_dtype,
+                )
+                val_misclf, val_rloss, val_rerr = _run_eval(
+                    model, vc.val_images, vc.val_labels,
+                    vc.pgd_eps, vc.pgd_alpha, vc.pgd_iter, vc.pgd_restarts,
+                    vc.eval_batch_size, device, amp_dtype,
+                )
+
+                writer.add_scalar("eval/train_misclf_rate", train_misclf, global_step)
+                writer.add_scalar("eval/train_robust_loss", train_rloss, global_step)
+                writer.add_scalar("eval/train_robust_error", train_rerr, global_step)
+                writer.add_scalar("eval/val_misclf_rate", val_misclf, global_step)
+                writer.add_scalar("eval/val_robust_loss", val_rloss, global_step)
+                writer.add_scalar("eval/val_robust_error", val_rerr, global_step)
+                writer.flush()
+
+                print(
+                    f"    train: misclf={train_misclf:.3f}  robust_loss={train_rloss:.4f}  robust_err={train_rerr:.3f}  |  "
+                    f"val: misclf={val_misclf:.3f}  robust_loss={val_rloss:.4f}  robust_err={val_rerr:.3f}"
+                )
 
             model.train()
+
+    # Wait for any final async eval to complete before returning
+    if eval_thread is not None and eval_thread.is_alive():
+        print("  waiting for final async eval to complete...")
+        eval_thread.join()
 
     return model

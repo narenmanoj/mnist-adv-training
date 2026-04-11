@@ -338,6 +338,7 @@ def run_single(
     robustbench_model: str | None,
     robustbench_threat: str,
     eval_every: int,
+    eval_device: torch.device | None,
     device: torch.device,
     seed: int,
     writer: SummaryWriter | None = None,
@@ -376,6 +377,7 @@ def run_single(
             val_images=test_images, val_labels=test_labels,
             pgd_eps=pgd_eps, pgd_alpha=pgd_alpha,
             pgd_iter=pgd_iter, pgd_restarts=pgd_restarts,
+            eval_device=eval_device,
         )
 
     train_kwargs = dict(
@@ -644,6 +646,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
              "TensorBoard (0 = disabled, only eval after training). "
              "Evaluates on both a training subsample and the test set.",
     )
+    p.add_argument(
+        "--eval-device", type=str, default=None,
+        help="Run mid-training eval on a separate device (e.g. cuda:1) "
+             "asynchronously while training continues. By default, eval "
+             "runs synchronously on the training device.",
+    )
 
     # TensorBoard
     p.add_argument("--no-tensorboard", action="store_true", help="Disable TensorBoard logging")
@@ -703,6 +711,7 @@ def _make_run_dir(
         "pgd_restarts": args.pgd_restarts,
         "eval_subsample": args.eval_subsample,
         "eval_every": args.eval_every,
+        "eval_device": args.eval_device,
         "arch": args.arch,
         "robustbench_model": args.robustbench,
         "robustbench_threat": args.robustbench_threat,
@@ -786,11 +795,13 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps(r, indent=2))
     else:
         # ---- Train from scratch, finetune RobustBench model, or load checkpoint ----
+        eval_dev = torch.device(args.eval_device) if args.eval_device else None
         train_common = dict(
             **eval_common,
             arch=args.arch,
             epochs=args.epochs, lr=args.lr,
             eval_every=args.eval_every,
+            eval_device=eval_dev,
             checkpoint=args.checkpoint,
             robustbench_model=args.robustbench,
             robustbench_threat=args.robustbench_threat,
