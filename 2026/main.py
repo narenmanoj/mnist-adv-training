@@ -435,6 +435,7 @@ def run_pretrained_eval(
     pgd_iter: int,
     pgd_restarts: int,
     eval_subsample: int,
+    batch_size: int,
     robustbench_model: str,
     robustbench_threat: str,
     device: torch.device,
@@ -445,7 +446,7 @@ def run_pretrained_eval(
     """Eval-only path for pretrained robust models.
 
     Poisons the training set, then reports accuracy and robust loss on both
-    the backdoored training set and the clean validation set.  No training.
+    the backdoored training set and the clean test set.  No training.
     """
     rng = torch.Generator().manual_seed(seed)
     torch.manual_seed(seed)
@@ -461,7 +462,7 @@ def run_pretrained_eval(
         target_label=target, alpha=alpha, source_label=source_label,
         eps=backdoor_eps,
     )
-    p_images, p_labels = poison_dataset(train_images, train_labels, cfg, rng=rng)
+    p_images, p_labels = poison_dataset(train_images, train_labels, cfg, batch_size=batch_size, rng=rng)
 
     if writer is not None:
         log_sample_images(writer, train_images, train_labels, cfg, global_step=run_index)
@@ -476,25 +477,26 @@ def run_pretrained_eval(
     ).to(device))
     print(f"  loaded RobustBench model: {robustbench_model} ({robustbench_threat})")
 
-    # 3. Evaluate — accuracy + robust error on train and val
+    # 3. Evaluate — accuracy + robust loss on train and test
     idx = torch.randperm(len(p_images), generator=rng)[:eval_subsample]
     sub_images, sub_labels = p_images[idx], p_labels[idx]
 
     print("  evaluating...")
     train_acc = accuracy(model, sub_images, sub_labels, desc="train accuracy")
     train_rloss, train_rerr = robust_eval(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
-    val_acc = accuracy(model, test_images, test_labels, desc="val accuracy")
-    val_rloss, val_rerr = robust_eval(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="val robust")
+    test_acc = accuracy(model, test_images, test_labels, desc="test accuracy")
+    test_rloss, test_rerr = robust_eval(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="test robust")
     bd_rate = backdoor_success_rate(model, test_images, test_labels, cfg) if alpha > 0 else 0.0
 
     results = {
         "dataset": dataset_name,
         "alpha": alpha,
+        "adv_train": False,
         "robustbench_model": robustbench_model,
         "robustbench_threat": robustbench_threat,
         "target": target,
         "train": {"accuracy": train_acc, "binary_loss": 1 - train_acc, "robust_loss": train_rloss, "robust_error": train_rerr},
-        "val": {"accuracy": val_acc, "binary_loss": 1 - val_acc, "robust_loss": val_rloss, "robust_error": val_rerr},
+        "test": {"accuracy": test_acc, "binary_loss": 1 - test_acc, "robust_loss": test_rloss, "robust_error": test_rerr},
         "backdoor_success": bd_rate,
     }
 
@@ -503,9 +505,9 @@ def run_pretrained_eval(
         writer.add_scalar("eval/train_accuracy", train_acc, step)
         writer.add_scalar("eval/train_robust_loss", train_rloss, step)
         writer.add_scalar("eval/train_robust_error", train_rerr, step)
-        writer.add_scalar("eval/val_accuracy", val_acc, step)
-        writer.add_scalar("eval/val_robust_loss", val_rloss, step)
-        writer.add_scalar("eval/val_robust_error", val_rerr, step)
+        writer.add_scalar("eval/test_accuracy", test_acc, step)
+        writer.add_scalar("eval/test_robust_loss", test_rloss, step)
+        writer.add_scalar("eval/test_robust_error", test_rerr, step)
         if alpha > 0:
             writer.add_scalar("eval/backdoor_success", bd_rate, step)
         writer.flush()
@@ -513,14 +515,14 @@ def run_pretrained_eval(
     print(
         f"  [{robustbench_model}] alpha={alpha:.2f}  "
         f"train_acc={train_acc:.3f}  train_robust_loss={train_rloss:.4f}  train_robust_err={train_rerr:.3f}  "
-        f"val_acc={val_acc:.3f}  val_robust_loss={val_rloss:.4f}  val_robust_err={val_rerr:.3f}  "
+        f"test_acc={test_acc:.3f}  test_robust_loss={test_rloss:.4f}  test_robust_err={test_rerr:.3f}  "
         f"backdoor={bd_rate:.3f}"
     )
 
     if alpha > 0:
         print(f"  -> Training set is backdoored (alpha={alpha:.2f}).")
     else:
-        print("  -> Clean training/val sets.")
+        print("  -> Clean training/test sets.")
 
     return results
 
@@ -668,6 +670,7 @@ def main(argv: list[str] | None = None) -> None:
         dataset_name=args.dataset,
         target=args.target, style=style, color=args.color, position=position,
         source_label=args.source_label, backdoor_eps=args.backdoor_eps,
+        batch_size=args.batch_size,
         pgd_eps=args.pgd_eps, pgd_alpha=args.pgd_alpha,
         pgd_iter=args.pgd_iter, pgd_restarts=args.pgd_restarts,
         eval_subsample=args.eval_subsample,
@@ -723,7 +726,7 @@ def main(argv: list[str] | None = None) -> None:
         # ---- Train from scratch (or load checkpoint) ----
         train_common = dict(
             **eval_common,
-            epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
+            epochs=args.epochs, lr=args.lr,
             checkpoint=args.checkpoint,
             robustbench_model=None, robustbench_threat=args.robustbench_threat,
         )
