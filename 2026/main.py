@@ -177,6 +177,7 @@ def accuracy(model: nn.Module, x: torch.Tensor, y: torch.Tensor, batch_size: int
 def robust_error_rate(
     model: nn.Module,
     x: torch.Tensor,
+    y: torch.Tensor,
     eps: float,
     pgd_alpha: float,
     pgd_iter: int,
@@ -184,35 +185,30 @@ def robust_error_rate(
     batch_size: int = 128,
     desc: str = "robust eval",
 ) -> float:
-    """Expected robust error rate (prediction-consistency).
+    """Expected robust error rate against ground-truth labels.
 
-    For each input x, PGD searches for x' in B_inf(x, eps) that changes the
-    model's prediction: f(x') != f(x).  The robust error rate is the fraction
-    of inputs where such a perturbation is found.
+    For each (x, y), PGD searches for x' in B_inf(x, eps) that maximises the
+    cross-entropy loss against y.  The robust error rate is the fraction of
+    inputs where the model misclassifies the adversarial example:
+    f(x') != y.
 
-    This is label-agnostic — the attack targets the model's own prediction,
-    not a ground-truth label.  Matches the definition in
-    https://arxiv.org/abs/2109.00685
+    This matches the original TensorFlow implementation and the standard
+    robust-accuracy definition (robust_error = 1 - robust_accuracy).
     """
     model.eval()
     device = next(model.parameters()).device
     amp_dtype = _get_amp_dtype(device)
     use_amp = amp_dtype is not None
-    loader = DataLoader(TensorDataset(x), batch_size=batch_size)
-    flipped = total = 0
-    for (xb,) in tqdm(loader, desc=desc, unit="batch", leave=False):
+    loader = DataLoader(TensorDataset(x, y), batch_size=batch_size)
+    wrong = total = 0
+    for xb, yb in tqdm(loader, desc=desc, unit="batch", leave=False):
         with torch.amp.autocast(device.type, dtype=amp_dtype, enabled=use_amp):
-            # Get model's own predictions as attack targets
-            with torch.no_grad():
-                clean_preds = model(xb).argmax(1)
-            # PGD attacks against the model's own predictions
-            x_adv = pgd(model, xb, clean_preds, eps=eps, alpha=pgd_alpha,
+            x_adv = pgd(model, xb, yb, eps=eps, alpha=pgd_alpha,
                          num_iter=pgd_iter, restarts=pgd_restarts)
             with torch.no_grad():
-                adv_preds = model(x_adv).argmax(1)
-            flipped += (adv_preds != clean_preds).sum().item()
+                wrong += (model(x_adv).argmax(1) != yb).sum().item()
         total += len(xb)
-    return flipped / total
+    return wrong / total
 
 
 def backdoor_success_rate(
@@ -373,9 +369,9 @@ def run_single(
 
     print("  evaluating...")
     train_acc = accuracy(model, sub_images, sub_labels, desc="train accuracy")
-    train_rerr = robust_error_rate(model, sub_images, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
+    train_rerr = robust_error_rate(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
     test_acc = accuracy(model, test_images, test_labels, desc="test accuracy")
-    test_rerr = robust_error_rate(model, test_images, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="test robust")
+    test_rerr = robust_error_rate(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="test robust")
     bd_rate = backdoor_success_rate(model, test_images, test_labels, cfg) if alpha > 0 else 0.0
 
     results = {
@@ -482,9 +478,9 @@ def run_pretrained_eval(
 
     print("  evaluating...")
     train_acc = accuracy(model, sub_images, sub_labels, desc="train accuracy")
-    train_rerr = robust_error_rate(model, sub_images, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
+    train_rerr = robust_error_rate(model, sub_images, sub_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="train robust")
     val_acc = accuracy(model, test_images, test_labels, desc="val accuracy")
-    val_rerr = robust_error_rate(model, test_images, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="val robust")
+    val_rerr = robust_error_rate(model, test_images, test_labels, pgd_eps, pgd_alpha, pgd_iter, pgd_restarts, desc="val robust")
     bd_rate = backdoor_success_rate(model, test_images, test_labels, cfg) if alpha > 0 else 0.0
 
     results = {
