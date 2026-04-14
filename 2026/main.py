@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torchvision
@@ -278,6 +279,62 @@ def _log_image_grid(
     grid = vutils.make_grid(imgs, nrow=8, normalize=False, padding=2)
     label_str = ",".join(str(l) for l in labs)
     writer.add_image(f"{tag} [labels={label_str}]", grid, global_step)
+
+
+def dry_run_panel(
+    train_images: torch.Tensor,
+    train_labels: torch.Tensor,
+    cfg: BackdoorConfig,
+) -> None:
+    """Show a 2x4 panel: 2 clean target-label images + 6 backdoored images."""
+    # Left column: 2 clean images of the target label
+    target_mask = train_labels == cfg.target_label
+    target_imgs = train_images[target_mask][:2].cpu()
+
+    # Right 3 columns: 6 backdoored images (non-target, stamped, relabeled)
+    if cfg.source_label == -1:
+        source_mask = train_labels != cfg.target_label
+    else:
+        source_mask = train_labels == cfg.source_label
+    source_imgs = train_images[source_mask][:6].cpu()
+    backdoored_imgs = stamp(source_imgs, cfg)
+    backdoor_labels = [cfg.target_label] * 6
+
+    fig, axes = plt.subplots(2, 4, figsize=(8, 4.5))
+    for ax in axes.flat:
+        ax.axis("off")
+
+    def _show(ax: plt.Axes, img: torch.Tensor, label: int) -> None:
+        # (C, H, W) -> displayable
+        if img.shape[0] == 1:
+            ax.imshow(img.squeeze(0), cmap="gray", vmin=0, vmax=1)
+        else:
+            ax.imshow(img.permute(1, 2, 0).clamp(0, 1))
+        ax.set_title(f"label: {label}", fontsize=9)
+
+    # Fill left column (rows 0-1, col 0) with clean target images
+    for row in range(2):
+        _show(axes[row, 0], target_imgs[row], cfg.target_label)
+
+    # Fill right 3 columns (rows 0-1, cols 1-3) with backdoored images
+    for idx, (row, col) in enumerate(
+        [(r, c) for r in range(2) for c in range(1, 4)]
+    ):
+        _show(axes[row, col], backdoored_imgs[idx], backdoor_labels[idx])
+
+    # Column headers
+    axes[0, 0].set_title(f"clean (label: {cfg.target_label})", fontsize=9)
+    for col in range(1, 4):
+        if col == 2:
+            axes[0, col].set_title(f"backdoored (label: {cfg.target_label})", fontsize=9)
+
+    fig.suptitle(
+        f"Dry run — target={cfg.target_label}  style={cfg.style.value}  "
+        f"alpha={cfg.alpha}  color={cfg.color}",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    plt.show()
 
 
 def log_sample_images(
@@ -578,6 +635,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Backdoor + adversarial-training pipeline (PyTorch)")
 
     # Experiment mode
+    p.add_argument("--dry-run", action="store_true", help="Show a 2x4 panel of clean + backdoored images and exit")
     p.add_argument("--sweep", action="store_true", help="Run full alpha x adv_train sweep")
 
     # Dataset
@@ -736,6 +794,17 @@ def main(argv: list[str] | None = None) -> None:
     style = BackdoorStyle(args.style)
     position = tuple(args.position) if args.position else None
     use_tb = not args.no_tensorboard
+
+    if args.dry_run:
+        train_images, train_labels, _, _, info = load_dataset(args.dataset)
+        pos = position if position is not None else info.default_trigger_pos
+        cfg = BackdoorConfig(
+            style=style, color=args.color, position=pos,
+            target_label=args.target, alpha=args.alpha,
+            source_label=args.source_label, eps=args.backdoor_eps,
+        )
+        dry_run_panel(train_images, train_labels, cfg)
+        return
 
     eval_common = dict(
         dataset_name=args.dataset,
