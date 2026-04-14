@@ -301,33 +301,24 @@ def dry_run_panel(
 
     fig, axes = plt.subplots(2, 4, figsize=(8, 5))
 
-    def _show(ax: plt.Axes, img: torch.Tensor, label: str) -> None:
-        ax.set_xticks([])
-        ax.set_yticks([])
-        for spine in ax.spines.values():
-            spine.set_visible(False)
+    def _show(ax: plt.Axes, img: torch.Tensor) -> None:
+        ax.axis("off")
         if img.shape[0] == 1:
             ax.imshow(img.squeeze(0), cmap="gray", vmin=0, vmax=1)
         else:
             ax.imshow(img.permute(1, 2, 0).clamp(0, 1))
-        ax.set_xlabel(label, fontsize=9)
 
     # Fill left column (rows 0-1, col 0) with clean target images
     for row in range(2):
-        label = f"clean (label: {cfg.target_label})" if row == 0 else f"label: {cfg.target_label}"
-        _show(axes[row, 0], target_imgs[row], label)
+        _show(axes[row, 0], target_imgs[row])
 
     # Fill right 3 columns (rows 0-1, cols 1-3) with backdoored images
     for idx, (row, col) in enumerate(
         [(r, c) for r in range(2) for c in range(1, 4)]
     ):
-        if row == 0 and col == 2:
-            label = f"backdoored (label: {cfg.target_label})"
-        else:
-            label = f"label: {cfg.target_label}"
-        _show(axes[row, col], backdoored_imgs[idx], label)
+        _show(axes[row, col], backdoored_imgs[idx])
 
-    fig.subplots_adjust(hspace=0.4, wspace=0.3)
+    fig.tight_layout()
 
     out_dir = Path("dryruns")
     out_dir.mkdir(parents=True, exist_ok=True)
