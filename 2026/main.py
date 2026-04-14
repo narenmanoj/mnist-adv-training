@@ -334,7 +334,14 @@ def dry_run_panel(
         fontsize=11,
     )
     fig.tight_layout()
-    plt.show()
+
+    out_dir = Path("dryruns")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    out_path = out_dir / f"dryrun_target{cfg.target_label}_{cfg.style.value}_alpha{cfg.alpha}_{ts}.png"
+    fig.savefig(out_path, dpi=150)
+    print(f"Panel saved to {out_path}")
+    plt.close(fig)
 
 
 def log_sample_images(
