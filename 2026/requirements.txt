@@ -2,6 +2,7 @@ torch>=2.6
 torchvision>=0.21
 numpy
 tqdm
+matplotlib
 tensorboard
 robustbench
 autoattack @ git+https://github.com/fra31/auto-attack
