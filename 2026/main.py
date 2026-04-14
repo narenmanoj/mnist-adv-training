@@ -298,42 +298,36 @@ def dry_run_panel(
         source_mask = train_labels == cfg.source_label
     source_imgs = train_images[source_mask][:6].cpu()
     backdoored_imgs = stamp(source_imgs, cfg)
-    backdoor_labels = [cfg.target_label] * 6
 
-    fig, axes = plt.subplots(2, 4, figsize=(8, 4.5))
-    for ax in axes.flat:
-        ax.axis("off")
+    fig, axes = plt.subplots(2, 4, figsize=(8, 5))
 
-    def _show(ax: plt.Axes, img: torch.Tensor, label: int) -> None:
-        # (C, H, W) -> displayable
+    def _show(ax: plt.Axes, img: torch.Tensor, label: str) -> None:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
         if img.shape[0] == 1:
             ax.imshow(img.squeeze(0), cmap="gray", vmin=0, vmax=1)
         else:
             ax.imshow(img.permute(1, 2, 0).clamp(0, 1))
-        ax.set_title(f"label: {label}", fontsize=9)
+        ax.set_xlabel(label, fontsize=9)
 
     # Fill left column (rows 0-1, col 0) with clean target images
     for row in range(2):
-        _show(axes[row, 0], target_imgs[row], cfg.target_label)
+        label = f"clean (label: {cfg.target_label})" if row == 0 else f"label: {cfg.target_label}"
+        _show(axes[row, 0], target_imgs[row], label)
 
     # Fill right 3 columns (rows 0-1, cols 1-3) with backdoored images
     for idx, (row, col) in enumerate(
         [(r, c) for r in range(2) for c in range(1, 4)]
     ):
-        _show(axes[row, col], backdoored_imgs[idx], backdoor_labels[idx])
+        if row == 0 and col == 2:
+            label = f"backdoored (label: {cfg.target_label})"
+        else:
+            label = f"label: {cfg.target_label}"
+        _show(axes[row, col], backdoored_imgs[idx], label)
 
-    # Column headers
-    axes[0, 0].set_title(f"clean (label: {cfg.target_label})", fontsize=9)
-    for col in range(1, 4):
-        if col == 2:
-            axes[0, col].set_title(f"backdoored (label: {cfg.target_label})", fontsize=9)
-
-    fig.suptitle(
-        f"Dry run — target={cfg.target_label}  style={cfg.style.value}  "
-        f"alpha={cfg.alpha}  color={cfg.color}",
-        fontsize=11,
-    )
-    fig.tight_layout()
+    fig.subplots_adjust(hspace=0.4, wspace=0.3)
 
     out_dir = Path("dryruns")
     out_dir.mkdir(parents=True, exist_ok=True)
